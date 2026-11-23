@@ -170,7 +170,7 @@ function askGyroPermission() {
 }
 
 // ---------- chế độ AR thật ----------
-const REJUMP_AFTER = 8; // mất dấu lâu hơn 8 giây thì thỏ nhảy ra lại từ đầu
+const REJUMP_AFTER = 8; // mất dấu lâu hơn 8 giây thì lần sau thỏ nhảy ra lại từ đầu
 async function startAR() {
   const { MindARThree } = await import("mindar-image-three");
   const mindar = new MindARThree({
@@ -178,9 +178,9 @@ async function startAR() {
     imageTargetSrc: "./targets.mind",
     uiScanning: "no",
     uiLoading: "yes",
-    filterMinCF: 0.0005, // chống rung nhẹ
-    filterBeta: 50,      // bám nhanh theo chuyển động camera (trước đây quá trễ)
-    missTolerance: 5,
+    filterMinCF: 0.001,
+    filterBeta: 10,
+    missTolerance: 3,   // ra khỏi khung hình là thỏ biến mất nhanh
     warmupTolerance: 2,
   });
   const { renderer, scene, camera } = mindar;
@@ -189,44 +189,75 @@ async function startAR() {
   const anchor = mindar.addAnchor(0);
   const actor = makeActor();
 
-  // thỏ nằm trong "holder" riêng: khi đang bám hình thì chép vị trí của hình vẽ,
-  // khi mất dấu thì giữ nguyên chỗ cũ và xoay ngược theo con quay để vẫn đứng yên trên trang giấy
   const holder = new THREE.Group();
   holder.matrixAutoUpdate = false;
+  holder.visible = false;
   holder.add(actor.root);
   scene.add(holder);
 
-  let tracking = false, holding = false, lostAt = 0;
-  const lastM = new THREE.Matrix4(), lastQ = new THREE.Quaternion(), relQ = new THREE.Quaternion(), rotM = new THREE.Matrix4();
+  // ----- bộ ổn định vị trí -----
+  // Vị trí thỏ (trong khung camera) được giữ ở sPos/sQuat/sScale:
+  //  • mỗi khung hình: xoay ngược theo con quay → thỏ đứng yên trên trang giấy cả khi lia nhanh
+  //  • mỗi lần camera đo được hình vẽ: bỏ các phép đo hỏng (méo, nhảy vọt), còn lại thì hoà dần vào
+  //  • luôn dựng lại ma trận cứng với tỉ lệ đều → thỏ không bao giờ bị dẹt
+  const sPos = new THREE.Vector3(), sQuat = new THREE.Quaternion();
+  let sScale = 1, have = false, rejects = 0;
+  const mPos = new THREE.Vector3(), mQuat = new THREE.Quaternion(), mScl = new THREE.Vector3();
+  const gPrev = new THREE.Quaternion(), dq = new THREE.Quaternion(), one = new THREE.Vector3();
+  let gPrevOk = false;
 
+  function measure(m) {
+    m.decompose(mPos, mQuat, mScl);
+    const sx = Math.abs(mScl.x), sy = Math.abs(mScl.y);
+    const s = (sx + sy) / 2;
+    const aniso = Math.max(sx, sy) / Math.max(1e-6, Math.min(sx, sy));
+    if (!have) {
+      if (aniso > 1.3) return;
+      sPos.copy(mPos); sQuat.copy(mQuat); sScale = s; have = true; rejects = 0;
+      return;
+    }
+    const ang = sQuat.angleTo(mQuat);
+    const jump = mPos.distanceTo(sPos) / sScale;
+    const sRatio = Math.abs(s / sScale - 1);
+    const bad = aniso > 1.3 || ang > 0.45 || jump > 0.5 || sRatio > 0.3;
+    if (bad && rejects < 8) { rejects++; return; } // bỏ phép đo hỏng khi lia nhanh
+    rejects = 0;
+    const k = bad ? 1 : Math.min(1, 0.35 + jump * 1.5 + ang);
+    sPos.lerp(mPos, k);
+    sQuat.slerp(mQuat, k);
+    sScale += (s - sScale) * k;
+  }
+
+  let lostAt = -99;
   anchor.onTargetFound = () => {
     const now = clock.getElapsedTime();
-    tracking = true;
     hint.hidden = true;
-    if (actor.state === "hidden" || (holding && now - lostAt > REJUMP_AFTER)) actor.jump(now);
-    holding = false;
+    have = false;
+    if (actor.state === "hidden" || now - lostAt > REJUMP_AFTER) actor.jump(now);
   };
+  anchor.onTargetUpdate = () => { if (anchor.group.visible) measure(anchor.group.matrix); };
   anchor.onTargetLost = () => {
-    tracking = false;
-    holding = actor.state !== "hidden";
+    have = false;
     lostAt = clock.getElapsedTime();
     hint.hidden = false;
-    hintText.textContent = holding ? "Thỏ vẫn ở đây · hướng lại vào hình vẽ để bám chính xác" : "Đưa camera vào hình vẽ…";
+    hintText.textContent = "Đưa camera vào hình vẽ…";
   };
   renderer.domElement.addEventListener("pointerdown", () => actor.hop(clock.getElapsedTime()));
 
   await mindar.start();
   hint.hidden = false;
   renderer.setAnimationLoop(() => {
-    if (tracking) {
-      holder.matrix.copy(anchor.group.matrix);
-      lastM.copy(anchor.group.matrix);
-      lastQ.copy(gyro.q);
-    } else if (holding && gyro.ok) {
-      relQ.copy(gyro.q).invert().multiply(lastQ);
-      holder.matrix.multiplyMatrices(rotM.makeRotationFromQuaternion(relQ), lastM);
+    // bù chuyển động xoay của điện thoại giữa các lần đo
+    if (gyro.ok) {
+      if (gPrevOk && have) {
+        dq.copy(gyro.q).invert().multiply(gPrev);
+        sPos.applyQuaternion(dq);
+        sQuat.premultiply(dq);
+      }
+      gPrev.copy(gyro.q); gPrevOk = true;
     }
-    holder.visible = tracking || holding;
+    holder.visible = anchor.group.visible && have;
+    if (have) holder.matrix.compose(sPos, sQuat, one.setScalar(sScale));
     holder.matrixWorldNeedsUpdate = true;
     actor.update(clock.getElapsedTime());
     renderer.render(scene, camera);
