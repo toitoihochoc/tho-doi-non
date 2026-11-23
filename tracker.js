@@ -68,7 +68,13 @@
         }
       }
     }
-    return best;
+    // tinh chỉnh dưới mức điểm ảnh / dưới bậc tỉ lệ bằng đỉnh parabol → vị trí mượt, không nhảy theo ô
+    const para = (a, b, c) => { const den = a - 2 * b + c; return den < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den)) : 0; };
+    const c0 = best.conf;
+    const fx = para(ncc(g, W, H, t, best.x - 1, best.y, best.s), c0, ncc(g, W, H, t, best.x + 1, best.y, best.s));
+    const fy = para(ncc(g, W, H, t, best.x, best.y - 1, best.s), c0, ncc(g, W, H, t, best.x, best.y + 1, best.s));
+    const fs = para(ncc(g, W, H, t, best.x, best.y, best.s * 0.97), c0, ncc(g, W, H, t, best.x, best.y, best.s * 1.03));
+    return { x: best.x + fx, y: best.y + fy, s: best.s * (1 + 0.03 * fs), conf: c0 };
   }
 
   const api = { sample, createTemplate, ncc, match };
