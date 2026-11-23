@@ -32,7 +32,7 @@
 </div>
 <div id="hint" hidden><span id="hintText">Đưa camera vào hình vẽ…</span></div>
 
-<script src="model.js?v=8"></script>
+<script src="model.js?v=10"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -88,6 +88,7 @@ function makeActor() {
 
   function update(now) {
     if (state === 'hidden') return;
+    B.update(now);
     const t = now - t0;
     let rot = Math.PI / 2, y = LAND_Y, z = 0, sx = 1, sy = 1, appear = 1;
 
@@ -99,7 +100,7 @@ function makeActor() {
       y = FEET_Y + (LAND_Y - FEET_Y) * ease(p);
       z = Math.sin(Math.PI * p) * 0.45;                    // vòng cung nhảy lên
       if (p < 0.15) { sy = 1 - p * 1.5; sx = 1 + p; }      // nhún lấy đà
-      if (p >= 1) { state = 'land'; t0 = now; }
+      if (p >= 1) { state = 'land'; t0 = now; B.greet(now + 0.3); }
     } else if (state === 'land' || state === 'hop') {
       const D = state === 'land' ? 0.5 : 0.7;
       const p = Math.min(t / D, 1);

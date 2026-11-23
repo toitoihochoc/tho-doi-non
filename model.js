@@ -21,6 +21,7 @@
       shoeDark: 0x5a3a24,
       cream: 0xf6efe3,
       accent: 0xf0702a,
+      mouth: 0x7a2434,
     };
 
     // ---------- materials ----------
@@ -57,7 +58,7 @@
       const m = new THREE.Mesh(geo, mat(color, name.split('_')[0]));
       m.name = name;
       m.castShadow = true;
-      m.receiveShadow = true;
+      m.receiveShadow = false; // không tự đổ bóng lên người → bề mặt mượt, sạch
       if (outline !== false && outlineMat) {
         const o = new THREE.Mesh(geo, outlineMat);
         o.userData.isOutline = true;
@@ -120,23 +121,25 @@
       bunny.add(shoe);
     }
 
-    // arms
+    // arms — xoay quanh vai để vẫy tay được
+    const ARM_REST = 0.35;
     const arms = [];
     for (const s of [-1, 1]) {
-      const arm = part(ellip(0.1, 0.21, 0.1), C.fur, 'Fur_Arm' + (s < 0 ? 'L' : 'R'));
-      arm.position.set(0.39 * s, 0.7, 0.03);
-      arm.rotation.z = 0.35 * s;
-      up.add(arm);
-      arms.push(arm);
+      const pivot = new THREE.Group();
+      pivot.name = 'Arm' + (s < 0 ? 'L' : 'R');
+      pivot.position.set(0.33 * s, 0.87, 0.03);
+      pivot.rotation.z = ARM_REST * s;
+      const ag = ellip(0.1, 0.21, 0.1);
+      ag.translate(0, -0.17, 0);
+      pivot.add(part(ag, C.fur, 'Fur_Arm'));
+      up.add(pivot);
+      arms.push(pivot);
     }
 
-    // collar flaps
-    for (const s of [-1, 1]) {
-      const flap = part(ellip(0.13, 0.055, 0.025, 24), C.fur, 'Fur_Collar' + (s < 0 ? 'L' : 'R'));
-      flap.position.set(0.17 * s, 1.03, 0.24);
-      flap.rotation.set(-0.35, 0.55 * s, -0.45 * s);
-      up.add(flap);
-    }
+    // cổ: khối lông mềm nối thân với đầu cho liền mạch (không viền để không lộ đường nối)
+    const neck = part(ellip(0.28, 0.15, 0.27, 40), C.fur, 'Fur_Neck', false);
+    neck.position.set(0, 1.08, 0);
+    up.add(neck);
 
     // bow tie
     const bow = new THREE.Group();
@@ -144,8 +147,11 @@
     bow.position.set(0, 1.01, 0.3);
     bow.rotation.x = -0.3;
     bow.scale.setScalar(1.25);
-    // nơ ruy băng: 2 cánh phồng + nút thắt + 2 đuôi
+    // nơ bướm: 2 cánh gắn bản lề ở nút thắt để vỗ cánh + 2 đuôi
+    const wings = [];
     for (const s of [-1, 1]) {
+      const hinge = new THREE.Group();
+      hinge.name = 'BowWing' + (s < 0 ? 'L' : 'R');
       const loop = part(ellip(0.105, 0.07, 0.045, 32), C.bow, 'Bow_Loop');
       loop.position.set(0.09 * s, 0.01, 0);
       loop.rotation.z = 0.2 * s;
@@ -153,7 +159,10 @@
       const fold = part(ellip(0.045, 0.028, 0.02, 16), C.bowDark, 'BowDark_Fold', false);
       fold.position.set(0.03 * s, 0, 0.032);
       loop.add(fold);
-      bow.add(loop);
+      hinge.add(loop);
+      hinge.userData.side = s;
+      bow.add(hinge);
+      wings.push(hinge);
 
       const tailR = part(ellip(0.036, 0.08, 0.02, 20), C.bow, 'Bow_Tail');
       tailR.position.set(0.045 * s, -0.08, -0.005);
@@ -193,16 +202,30 @@
       return h;
     }
 
-    // eyes (to, long lanh)
+    // eyes (to, long lanh) + mắt cười nheo ^ ^
+    const openEyes = [], happyEyes = [];
     for (const s of [-1, 1]) {
       const h = onHead(0.22 * s, -0.03, -0.012);
       h.name = 'Eye' + (s < 0 ? 'L' : 'R');
-      h.add(part(ellip(0.105, 0.095, 0.04, 28), C.ink, 'Ink_Eye', false));
+      const open = new THREE.Group();
+      open.name = 'EyeOpen';
+      open.add(part(ellip(0.105, 0.095, 0.04, 28), C.ink, 'Ink_Eye', false));
       const hi1 = part(ellip(0.042, 0.036, 0.015, 16), C.white, 'White_Shine', false);
       hi1.position.set(-0.035, 0.03, 0.032);
       const hi2 = part(ellip(0.018, 0.018, 0.01, 12), C.white, 'White_Shine2', false);
       hi2.position.set(0.042, -0.038, 0.034);
-      h.add(hi1, hi2);
+      open.add(hi1, hi2);
+      h.add(open);
+      openEyes.push(open);
+
+      const happyGeo = new THREE.TorusGeometry(0.075, 0.017, 8, 28, Math.PI);
+      happyGeo.scale(1, 0.85, 0.6);
+      const happy = part(happyGeo, C.ink, 'Ink_HappyEye', false);
+      happy.name = 'EyeHappy';
+      happy.position.set(0, -0.03, 0.02);
+      happy.visible = false;
+      h.add(happy);
+      happyEyes.push(happy);
 
       // eyebrow (nhíu nhẹ)
       const bh = onHead(0.21 * s, 0.15, 0.0);
@@ -224,12 +247,26 @@
     // mouth ω
     const mh = onHead(0, -0.15, 0.0);
     mh.name = 'Mouth';
+    const omega = new THREE.Group();
     for (const s of [-1, 1]) {
       const arc = part(new THREE.TorusGeometry(0.042, 0.011, 8, 24, Math.PI), C.ink, 'Ink_Mouth', false);
       arc.rotation.z = Math.PI;
       arc.position.x = 0.042 * s;
-      mh.add(arc);
+      omega.add(arc);
     }
+    mh.add(omega);
+    // miệng cười tươi (hiện khi chào)
+    const smile = new THREE.Group();
+    smile.name = 'Smile';
+    const smileGeo = new THREE.CircleGeometry(0.075, 32, Math.PI, Math.PI);
+    smileGeo.scale(1, 0.85, 1);
+    smile.add(part(smileGeo, C.mouth, 'Mouth_Open', false));
+    const tongue = part(ellip(0.04, 0.022, 0.01, 16), C.pink, 'Pink_Tongue', false);
+    tongue.position.set(0, -0.042, 0.004);
+    smile.add(tongue);
+    smile.position.set(0, 0.01, 0.006);
+    smile.visible = false;
+    mh.add(smile);
 
     // floppy ears
     const ears = [];
@@ -281,7 +318,40 @@
       hat.add(dash);
     }
 
-    return { root: bunny, head, headPivot, ears, arms, hat, body };
+    // ---------- hoạt ảnh: nơ vỗ cánh, chớp mắt, cười nheo mắt + vẫy tay chào ----------
+    const GREET_EVERY = 7, GREET_DUR = 2.8;
+    let greetStart = -99, nextGreet = 1.2;
+    const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+    function greet(t) { greetStart = t; nextGreet = t + GREET_EVERY; }
+
+    function update(t) {
+      // nơ bướm vỗ cánh nhè nhẹ
+      const flap = 0.5 + 0.5 * Math.sin(t * 5.5);
+      for (const w of wings) w.rotation.y = -w.userData.side * (0.08 + 0.5 * flap);
+      bow.rotation.z = Math.sin(t * 2.75) * 0.05;
+
+      // chào hỏi định kỳ
+      if (t >= nextGreet) greet(t);
+      const p = (t - greetStart) / GREET_DUR;
+      const k = p >= 0 && p <= 1 ? smooth(0, 0.12, p) * (1 - smooth(0.85, 1, p)) : 0;
+
+      // mắt: chớp mắt khi bình thường, nheo ^ ^ khi cười
+      const blink = k < 0.05 && (t % 3.7) < 0.13 ? 0.1 : 1;
+      for (const e of openEyes) { e.scale.y = Math.max(0.05, (1 - k) * blink); e.visible = k < 0.7; }
+      for (const e of happyEyes) { e.visible = k > 0.3; e.scale.setScalar(0.6 + 0.4 * k); }
+      omega.visible = k < 0.4;
+      smile.visible = k >= 0.4;
+      smile.scale.setScalar(0.5 + 0.5 * k);
+
+      // vẫy tay phải
+      const R = arms[1];
+      R.rotation.z = ARM_REST + k * 2.15 + k * Math.sin(t * 11) * 0.35;
+      R.rotation.x = -k * 0.25;
+      return k;
+    }
+
+    return { root: bunny, head, headPivot, ears, arms, hat, body, update, greet };
   }
 
   if (typeof module !== 'undefined' && module.exports) module.exports = { buildBunny };

@@ -25,7 +25,7 @@
   <button id="glb">⬇ Tải file .glb</button>
 </div>
 
-<script src="model.js?v=8"></script>
+<script src="model.js?v=10"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -106,6 +106,7 @@ addEventListener('resize', () => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const t = clock.getElapsedTime();
+  B.update(t);
   B.body.scale.set(1 + Math.sin(t * 2) * 0.012, 1 - Math.sin(t * 2) * 0.012, 1);
   B.headPivot.rotation.z = Math.sin(t * 1.2) * 0.06;
   B.headPivot.position.y = 1.12 + Math.sin(t * 2) * 0.01;
