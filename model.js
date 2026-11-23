@@ -16,8 +16,10 @@
       white: 0xffffff,
       bow: 0xe8455a,
       bowDark: 0xb8283f,
-      sole: 0xa9dcf2,
-      strap: 0x4d9fd8,
+      shoe: 0x9a6a43,
+      shoeLight: 0xbc8b5f,
+      shoeDark: 0x5a3a24,
+      cream: 0xf6efe3,
     };
 
     // ---------- materials ----------
@@ -82,29 +84,46 @@
     const body = part(bodyGeo, C.fur, 'Fur_Body');
     bunny.add(body);
 
-    // feet
+    // giày sneaker nâu quá khổ (thay cho bàn chân)
+    const UP = { rx: 0.25, ry: 0.16, rz: 0.44, y: 0.16, z: 0.06 }; // thân giày
+    const upperTop = (z) => UP.y + UP.ry * Math.sqrt(Math.max(0, 1 - ((z - UP.z) / UP.rz) ** 2));
     for (const s of [-1, 1]) {
-      const foot = part(ellip(0.22, 0.13, 0.32), C.fur, 'Fur_Foot' + (s < 0 ? 'L' : 'R'));
-      foot.position.set(0.23 * s, 0.13, 0.12);
-      foot.rotation.y = 0.2 * s;
-      bunny.add(foot);
+      const shoe = new THREE.Group();
+      shoe.name = 'Sneaker' + (s < 0 ? 'L' : 'R');
+      shoe.position.set(0.25 * s, 0, 0.1);
+      shoe.rotation.y = 0.15 * s;
 
-      // dép quá cỡ: đế dày, quai ngang, quả bông trên quai
-      const slipper = new THREE.Group();
-      slipper.name = 'Slipper' + (s < 0 ? 'L' : 'R');
-      slipper.position.set(0.24 * s, 0, 0.12);
-      slipper.rotation.y = 0.2 * s;
-      const sole = part(ellip(0.25, 0.055, 0.47, 48), C.sole, 'Sole_Slipper');
-      sole.position.set(0, 0.05, 0.1);
-      const strapGeo = new THREE.TorusGeometry(0.21, 0.048, 12, 32, Math.PI);
-      strapGeo.scale(1, 0.95, 1.3);
-      const strap = part(strapGeo, C.strap, 'Strap_Slipper');
-      strap.position.set(0, 0.08, 0.2);
-      strap.rotation.x = -0.25;
-      const pom = part(ellip(0.08, 0.075, 0.075, 24), C.white, 'White_Pom');
-      pom.position.set(0, 0.3, 0.27);
-      slipper.add(sole, strap, pom);
-      bunny.add(slipper);
+      const outsole = part(ellip(0.29, 0.04, 0.52, 48), C.shoeDark, 'ShoeDark_Outsole');
+      outsole.position.set(0, 0.035, 0.08);
+      const midsole = part(ellip(0.28, 0.06, 0.5, 48), C.cream, 'Cream_Midsole');
+      midsole.position.set(0, 0.075, 0.08);
+      const upper = part(ellip(UP.rx, UP.ry, UP.rz, 48), C.shoe, 'Shoe_Upper');
+      upper.position.set(0, UP.y, UP.z);
+      const toe = part(ellip(0.2, 0.12, 0.18, 32), C.shoeLight, 'ShoeLight_Toe');
+      toe.position.set(0, 0.14, 0.38);
+      const collarGeo = new THREE.TorusGeometry(0.14, 0.035, 10, 32);
+      collarGeo.rotateX(-Math.PI / 2);
+      const collar = part(collarGeo, C.shoeDark, 'ShoeDark_Collar');
+      collar.position.set(0, 0.3, -0.08);
+      const tongue = part(ellip(0.1, 0.035, 0.12, 24), C.shoeLight, 'ShoeLight_Tongue');
+      tongue.position.set(0, 0.32, 0.06);
+      tongue.rotation.x = 0.35;
+      shoe.add(outsole, midsole, upper, toe, collar, tongue);
+
+      // dây giày
+      for (const z of [0.13, 0.2, 0.27]) {
+        const lace = part(new THREE.CapsuleGeometry(0.02, 0.16, 4, 8), C.white, 'White_Lace', false);
+        lace.rotation.z = Math.PI / 2;
+        lace.position.set(0, upperTop(z) + 0.008, z);
+        shoe.add(lace);
+      }
+      // miếng tròn trang trí bên hông
+      const patch = part(ellip(0.055, 0.055, 0.012, 20), C.cream, 'Cream_Patch', false);
+      patch.position.set(0.252 * s, 0.17, 0.02);
+      patch.rotation.y = (Math.PI / 2) * s;
+      shoe.add(patch);
+
+      bunny.add(shoe);
     }
 
     // arms
