@@ -14,6 +14,10 @@
       hatDash: 0x7a4e2d,
       ink: 0x2b2326,
       white: 0xffffff,
+      bow: 0xe8455a,
+      bowDark: 0xb8283f,
+      sole: 0xa9dcf2,
+      strap: 0x4d9fd8,
     };
 
     // ---------- materials ----------
@@ -84,6 +88,23 @@
       foot.position.set(0.23 * s, 0.13, 0.12);
       foot.rotation.y = 0.2 * s;
       bunny.add(foot);
+
+      // dép quá cỡ: đế dày, quai ngang, quả bông trên quai
+      const slipper = new THREE.Group();
+      slipper.name = 'Slipper' + (s < 0 ? 'L' : 'R');
+      slipper.position.set(0.24 * s, 0, 0.12);
+      slipper.rotation.y = 0.2 * s;
+      const sole = part(ellip(0.25, 0.055, 0.47, 48), C.sole, 'Sole_Slipper');
+      sole.position.set(0, 0.05, 0.1);
+      const strapGeo = new THREE.TorusGeometry(0.21, 0.048, 12, 32, Math.PI);
+      strapGeo.scale(1, 0.95, 1.3);
+      const strap = part(strapGeo, C.strap, 'Strap_Slipper');
+      strap.position.set(0, 0.08, 0.2);
+      strap.rotation.x = -0.25;
+      const pom = part(ellip(0.08, 0.075, 0.075, 24), C.white, 'White_Pom');
+      pom.position.set(0, 0.3, 0.27);
+      slipper.add(sole, strap, pom);
+      bunny.add(slipper);
     }
 
     // arms
@@ -107,17 +128,28 @@
     // bow tie
     const bow = new THREE.Group();
     bow.name = 'BowTie';
-    bow.position.set(0, 1.07, 0.29);
-    bow.rotation.x = -0.35;
+    bow.position.set(0, 1.01, 0.3);
+    bow.rotation.x = -0.3;
+    bow.scale.setScalar(1.25);
+    // nơ ruy băng: 2 cánh phồng + nút thắt + 2 đuôi
     for (const s of [-1, 1]) {
-      const g = new THREE.ConeGeometry(0.06, 0.13, 16);
-      g.scale(1, 1, 0.5);
-      const wing = part(g, C.ink, 'Ink_BowWing', false);
-      wing.position.x = 0.065 * s;
-      wing.rotation.z = s < 0 ? -Math.PI / 2 : Math.PI / 2;
-      bow.add(wing);
+      const loop = part(ellip(0.105, 0.07, 0.045, 32), C.bow, 'Bow_Loop');
+      loop.position.set(0.09 * s, 0.01, 0);
+      loop.rotation.z = 0.2 * s;
+      // nếp gấp bên trong cánh nơ
+      const fold = part(ellip(0.045, 0.028, 0.02, 16), C.bowDark, 'BowDark_Fold', false);
+      fold.position.set(0.03 * s, 0, 0.032);
+      loop.add(fold);
+      bow.add(loop);
+
+      const tailR = part(ellip(0.036, 0.08, 0.02, 20), C.bow, 'Bow_Tail');
+      tailR.position.set(0.045 * s, -0.08, -0.005);
+      tailR.rotation.z = 0.35 * s;
+      bow.add(tailR);
     }
-    bow.add(part(ellip(0.035, 0.035, 0.025, 16), C.ink, 'Ink_BowKnot', false));
+    const knot = part(ellip(0.04, 0.045, 0.04, 20), C.bowDark, 'BowDark_Knot');
+    knot.position.z = 0.01;
+    bow.add(knot);
     bunny.add(bow);
 
     // tail
