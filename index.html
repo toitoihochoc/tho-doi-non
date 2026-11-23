@@ -47,7 +47,7 @@ import * as THREE from 'three';
 // Tỉ lệ hình nhận diện (target.jpg 615 x 790): MindAR coi chiều rộng = 1
 const TARGET_H = 790 / 615;
 const FEET_Y = -0.42;      // vị trí chân chú thỏ trên hình vẽ
-const LAND_Y = -0.12;      // chỗ chú thỏ đáp xuống sau khi nhảy
+const LAND_Y = 0;          // chân thỏ đáp đúng ĐIỂM GHIM (tâm hình vẽ) → sai số đo chỉ làm thỏ to/nhỏ chút xíu, chân không xê dịch
 const SCALE = 0.36;
 
 const intro = document.getElementById('intro');
@@ -247,7 +247,7 @@ async function startAR() {
 
   // bộ lọc thích ứng, tách HƯỚNG nhìn (thỏ ở đâu trên màn hình) và KHOẢNG CÁCH (thỏ to/nhỏ)
   const wDir = new THREE.Vector3(0, 0, -1), rDir = new THREE.Vector3();
-  let wLogD = 0, angVel = 0, logVel = 0, qVel = 0;
+  let wLogD = 0, angVel = 0, logVel = 0;
   const lowpass = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
   function resetPos(raw) {
     wLogD = Math.log(raw.length()); wDir.copy(raw).normalize(); angVel = 0; logVel = 0;
@@ -264,9 +264,15 @@ async function startAR() {
     wLogD += (lg - wLogD) * lowpass(0.12 + 1.5 * Math.max(0, logVel - 0.15), dt);
     wPos.copy(wDir).multiplyScalar(Math.exp(wLogD));
   }
+  // hướng quay của thỏ trên trang giấy: trang không xoay → gần như khoá cứng.
+  // Chỉ khi lệch rõ rệt và kéo dài (bạn xoay hẳn trang giấy) mới xoay theo.
+  let yawOffSince = 0;
   function filterQuat(raw, dt) {
-    qVel += (wQuat.angleTo(raw) / dt - qVel) * lowpass(0.8, dt);
-    wQuat.slerp(raw, lowpass(0.25 + 2 * Math.max(0, qVel - 0.3), dt));
+    const diff = wQuat.angleTo(raw);
+    const t = nowS();
+    if (diff > 0.3) { if (!yawOffSince) yawOffSince = t; } else yawOffSince = 0;
+    const turning = yawOffSince && t - yawOffSince > 0.6;
+    wQuat.slerp(raw, lowpass(turning ? 1.5 : 0.03, dt));
   }
 
   // tự đo độ trễ camera: khi xoay máy, chọn độ trễ làm phép đo khớp nhất với vị trí đã ổn định
