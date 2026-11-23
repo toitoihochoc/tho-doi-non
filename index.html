@@ -24,7 +24,7 @@
 <div id="intro">
   <img src="target.jpg" alt="Hình vẽ chú thỏ đội nón">
   <h1>Thỏ Đội Nón 🐰🎩</h1>
-  <p>Hướng camera vào hình vẽ chú thỏ trên trang giấy. Giữ yên một chút, chú thỏ sẽ nhảy ra khỏi trang!</p>
+  <p>Hướng camera vào hình vẽ chú thỏ trên trang giấy. Giữ yên một chút, chú thỏ sẽ nhảy ra khỏi trang! Nên quét ở nơi đủ sáng, để trang giấy nằm trên bàn.</p>
   <button id="start">📷 Bắt đầu quét</button>
   <a class="link" href="?demo">Không có trang giấy? Xem thử không cần camera</a>
   <a class="link" href="viewer.html">Xem mô hình 3D xoay tự do</a>
@@ -196,48 +196,79 @@ async function startAR() {
   scene.add(holder);
 
   // ----- bộ ổn định vị trí -----
-  // Vị trí thỏ (trong khung camera) được giữ ở sPos/sQuat/sScale:
   //  • mỗi khung hình: xoay ngược theo con quay → thỏ đứng yên trên trang giấy cả khi lia nhanh
-  //  • mỗi lần camera đo được hình vẽ: bỏ các phép đo hỏng (méo, nhảy vọt), còn lại thì hoà dần vào
-  //  • luôn dựng lại ma trận cứng với tỉ lệ đều → thỏ không bao giờ bị dẹt
+  //  • mỗi lần camera đo được hình vẽ: bỏ phép đo hỏng (méo, nhảy vọt); hỏng liên tục thì ẩn thỏ
+  //  • dựng lại ma trận cứng với tỉ lệ đều → thỏ không bị dẹt
+  //  • trang giấy nằm trên bàn: lấy hướng "lên" từ cảm biến trọng lực → thỏ luôn đứng thẳng
   const sPos = new THREE.Vector3(), sQuat = new THREE.Quaternion();
   let sScale = 1, have = false, rejects = 0;
   const mPos = new THREE.Vector3(), mQuat = new THREE.Quaternion(), mScl = new THREE.Vector3();
+  const cPos = new THREE.Vector3(), cQuat = new THREE.Quaternion();
+  let cScale = 1, cand = false;
   const gPrev = new THREE.Quaternion(), dq = new THREE.Quaternion(), one = new THREE.Vector3();
   let gPrevOk = false;
+
+  function differs(pos, quat, s, refPos, refQuat, refS) {
+    return { ang: refQuat.angleTo(quat), jump: pos.distanceTo(refPos) / refS, sRatio: Math.abs(s / refS - 1) };
+  }
 
   function measure(m) {
     m.decompose(mPos, mQuat, mScl);
     const sx = Math.abs(mScl.x), sy = Math.abs(mScl.y);
     const s = (sx + sy) / 2;
     const aniso = Math.max(sx, sy) / Math.max(1e-6, Math.min(sx, sy));
+    if (aniso > 1.3) { if (have && ++rejects > 6) have = false; return; }
+
     if (!have) {
-      if (aniso > 1.3) return;
-      sPos.copy(mPos); sQuat.copy(mQuat); sScale = s; have = true; rejects = 0;
+      // cần 2 phép đo liên tiếp khớp nhau mới cho thỏ hiện (tránh hiện sai chỗ)
+      if (cand) {
+        const d = differs(mPos, mQuat, s, cPos, cQuat, cScale);
+        if (d.ang < 0.3 && d.jump < 0.25 && d.sRatio < 0.2) {
+          sPos.copy(mPos); sQuat.copy(mQuat); sScale = s; have = true; rejects = 0; cand = false;
+          return;
+        }
+      }
+      cPos.copy(mPos); cQuat.copy(mQuat); cScale = s; cand = true;
       return;
     }
-    const ang = sQuat.angleTo(mQuat);
-    const jump = mPos.distanceTo(sPos) / sScale;
-    const sRatio = Math.abs(s / sScale - 1);
-    const bad = aniso > 1.3 || ang > 0.45 || jump > 0.5 || sRatio > 0.3;
-    if (bad && rejects < 8) { rejects++; return; } // bỏ phép đo hỏng khi lia nhanh
+    const d = differs(mPos, mQuat, s, sPos, sQuat, sScale);
+    if (d.ang > 0.45 || d.jump > 0.4 || d.sRatio > 0.3) {
+      if (++rejects > 6) { have = false; cand = false; } // hỏng liên tục → ẩn rồi bắt lại từ đầu
+      return;
+    }
     rejects = 0;
-    const k = bad ? 1 : Math.min(1, 0.35 + jump * 1.5 + ang);
+    const k = Math.min(1, 0.3 + d.jump * 1.5 + d.ang);
     sPos.lerp(mPos, k);
     sQuat.slerp(mQuat, k);
     sScale += (s - sScale) * k;
+  }
+
+  // hướng đứng theo trọng lực
+  const upW = new THREE.Vector3(0, 1, 0), upC = new THREE.Vector3(), nC = new THREE.Vector3();
+  const xC = new THREE.Vector3(), yC = new THREE.Vector3(), basis = new THREE.Matrix4();
+  const qInv = new THREE.Quaternion(), qOut = new THREE.Quaternion();
+  function uprightQuat(q) {
+    if (!gyro.ok) return q;
+    upC.copy(upW).applyQuaternion(qInv.copy(gyro.q).invert());
+    nC.set(0, 0, 1).applyQuaternion(q);
+    if (nC.angleTo(upC) > 1.0) return q; // trang giấy dựng đứng (trên tường…) → dùng hướng camera đo
+    xC.set(1, 0, 0).applyQuaternion(q);
+    xC.addScaledVector(upC, -xC.dot(upC)).normalize();
+    yC.crossVectors(upC, xC);
+    basis.makeBasis(xC, yC, upC);
+    return qOut.setFromRotationMatrix(basis);
   }
 
   let lostAt = -99;
   anchor.onTargetFound = () => {
     const now = clock.getElapsedTime();
     hint.hidden = true;
-    have = false;
+    have = false; cand = false;
     if (actor.state === "hidden" || now - lostAt > REJUMP_AFTER) actor.jump(now);
   };
   anchor.onTargetUpdate = () => { if (anchor.group.visible) measure(anchor.group.matrix); };
   anchor.onTargetLost = () => {
-    have = false;
+    have = false; cand = false;
     lostAt = clock.getElapsedTime();
     hint.hidden = false;
     hintText.textContent = "Đưa camera vào hình vẽ…";
@@ -257,7 +288,7 @@ async function startAR() {
       gPrev.copy(gyro.q); gPrevOk = true;
     }
     holder.visible = anchor.group.visible && have;
-    if (have) holder.matrix.compose(sPos, sQuat, one.setScalar(sScale));
+    if (have) holder.matrix.compose(sPos, uprightQuat(sQuat), one.setScalar(sScale));
     holder.matrixWorldNeedsUpdate = true;
     actor.update(clock.getElapsedTime());
     renderer.render(scene, camera);
