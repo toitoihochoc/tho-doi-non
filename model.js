@@ -234,10 +234,11 @@
       h.add(happy);
       happyEyes.push(happy);
 
-      // eyebrow (nhíu nhẹ)
-      const bh = onHead(0.21 * s, 0.15, 0.0);
-      const brow = part(new THREE.CapsuleGeometry(0.011, 0.07, 4, 8), C.ink, 'Ink_Brow', false);
-      brow.rotation.z = s > 0 ? Math.PI / 2 - 0.3 : -(Math.PI / 2 - 0.3);
+      // lông mày nhếch lên tinh nghịch: đầu trong thấp, đuôi ngoài vểnh cao; bên phải nhếch cao hơn
+      const lift = s > 0 ? 0.55 : 0.3;
+      const bh = onHead(0.21 * s, s > 0 ? 0.175 : 0.155, 0.0);
+      const brow = part(new THREE.CapsuleGeometry(0.013, 0.075, 4, 10), C.ink, 'Ink_Brow', false);
+      brow.rotation.z = s > 0 ? Math.PI / 2 + lift : -(Math.PI / 2 + lift);
       bh.add(brow);
 
       // blush + 2 vạch má
