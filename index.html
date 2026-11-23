@@ -33,6 +33,7 @@
 <div id="hint" hidden><span id="hintText">Đưa camera vào hình vẽ…</span></div>
 
 <script src="model.js?v=13"></script>
+<script src="tracker.js?v=1"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -180,7 +181,7 @@ async function startAR() {
     uiLoading: "yes",
     filterMinCF: 0.001,
     filterBeta: 10,
-    missTolerance: 3,   // ra khỏi khung hình là thỏ biến mất nhanh
+    missTolerance: 4,
     warmupTolerance: 2,
   });
   const { renderer, scene, camera } = mindar;
@@ -259,25 +260,118 @@ async function startAR() {
     return qOut.setFromRotationMatrix(basis);
   }
 
-  let lostAt = -99;
+  // ----- bộ bám hình dự phòng: khi MindAR mất dấu (xa / nhòe) vẫn "ghim" thỏ vào hình vẽ -----
+  const LT = window.LiteTracker;
+  const container = document.getElementById("ar");
+  const WW = 320; let WH = 0, gray = null;
+  const wc = document.createElement("canvas");
+  const wctx = wc.getContext("2d", { willReadFrequently: true });
+  function grab() {
+    const v = mindar.video;
+    if (!v || !v.videoWidth) return false;
+    const h = Math.round((WW * v.videoHeight) / v.videoWidth);
+    if (h !== WH) { WH = h; wc.width = WW; wc.height = WH; gray = new Float32Array(WW * WH); }
+    wctx.drawImage(v, 0, 0, WW, WH);
+    const d = wctx.getImageData(0, 0, WW, WH).data;
+    for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    return true;
+  }
+  const pv = new THREE.Vector3(), invP = new THREE.Matrix4(), wp = { x: 0, y: 0, z: 0 };
+  function camToWork(p, out) {
+    pv.copy(p).applyMatrix4(camera.projectionMatrix);
+    const c = container.getBoundingClientRect(), vr = mindar.video.getBoundingClientRect();
+    const sx = ((pv.x + 1) / 2) * c.width + c.left, sy = ((1 - pv.y) / 2) * c.height + c.top;
+    out.x = ((sx - vr.left) / vr.width) * WW; out.y = ((sy - vr.top) / vr.height) * WH; out.z = pv.z;
+    return out;
+  }
+  function workToRay(x, y, out) {
+    const c = container.getBoundingClientRect(), vr = mindar.video.getBoundingClientRect();
+    const sx = (x / WW) * vr.width + vr.left, sy = (y / WH) * vr.height + vr.top;
+    const nx = ((sx - c.left) / c.width) * 2 - 1, ny = 1 - ((sy - c.top) / c.height) * 2;
+    invP.copy(camera.projectionMatrix).invert();
+    return out.set(nx, ny, 0.5).applyMatrix4(invP).normalize();
+  }
+
+  let tpl = null, capDist = 1, updCount = 0;
+  const tC = new THREE.Vector3(), tK = new THREE.Vector3();
+  function captureTemplate(m) {
+    if (!grab()) return;
+    tC.setFromMatrixPosition(m);
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const [cx, cy] of [[-0.5, -TARGET_H / 2], [0.5, -TARGET_H / 2], [0.5, TARGET_H / 2], [-0.5, TARGET_H / 2]]) {
+      camToWork(tK.set(cx, cy, 0).applyMatrix4(m), wp);
+      x0 = Math.min(x0, wp.x); x1 = Math.max(x1, wp.x); y0 = Math.min(y0, wp.y); y1 = Math.max(y1, wp.y);
+    }
+    camToWork(tC, wp);
+    const hw = ((x1 - x0) / 2) * 0.85, hh = ((y1 - y0) / 2) * 0.85;
+    if (hw < 6 || hh < 6) return;
+    const t = LT.createTemplate(gray, WW, WH, wp.x, wp.y, hw, hh);
+    if (t) { tpl = t; capDist = tC.length(); }
+  }
+
+  let liteActive = false, liteConf = 0, lowSince = 0, lostAt = -99;
+  const ray = new THREE.Vector3(), tgt = new THREE.Vector3();
+  function hideBunny(now) {
+    have = false; cand = false; liteActive = false;
+    lostAt = now;
+    hint.hidden = false;
+    hintText.textContent = "Đưa camera vào hình vẽ…";
+  }
+  function liteStep(now) {
+    camToWork(sPos, wp);
+    // hình vẽ ra khỏi khung hình → thỏ biến mất
+    if (wp.z > 1 || wp.x < -8 || wp.x > WW + 8 || wp.y < -8 || wp.y > WH + 8) { hideBunny(now); return; }
+    if (!grab()) return;
+    const sPred = capDist / sPos.length();
+    const r = LT.match(gray, WW, WH, tpl, wp.x, wp.y, sPred, 16);
+    liteConf += (Math.max(0, r.conf) - liteConf) * 0.3;
+    if (r.conf > 0.3) {
+      lowSince = 0;
+      workToRay(r.x, r.y, ray);
+      tgt.copy(ray).multiplyScalar(capDist / r.s);
+      sPos.lerp(tgt, 0.6);
+    } else {
+      if (!lowSince) lowSince = now;
+      if (now - lowSince > 0.8) hideBunny(now); // không tìm thấy hình vẽ nữa
+    }
+  }
+
+  // độ mờ: bám chắc = rõ nét, đang bám dự phòng (xa / nhòe) = mờ dần theo độ tin cậy
+  const mats = new Set();
+  actor.root.children[1].traverse((o) => { if (o.material) mats.add(o.material); });
+  let opacity = 1;
+  function setOpacity(o) {
+    opacity += (o - opacity) * 0.15;
+    const tr = opacity < 0.99;
+    for (const m of mats) {
+      if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
+      m.opacity = tr ? opacity : 1;
+    }
+  }
+
   anchor.onTargetFound = () => {
     const now = clock.getElapsedTime();
     hint.hidden = true;
+    if (liteActive && have) { liteActive = false; rejects = 0; return; } // bám dự phòng → bám chính, không nháy
     have = false; cand = false;
     if (actor.state === "hidden" || now - lostAt > REJUMP_AFTER) actor.jump(now);
   };
-  anchor.onTargetUpdate = () => { if (anchor.group.visible) measure(anchor.group.matrix); };
+  anchor.onTargetUpdate = () => {
+    if (!anchor.group.visible) return;
+    measure(anchor.group.matrix);
+    if (have && rejects === 0 && ++updCount % 6 === 0) captureTemplate(anchor.group.matrix);
+  };
   anchor.onTargetLost = () => {
-    have = false; cand = false;
-    lostAt = clock.getElapsedTime();
-    hint.hidden = false;
-    hintText.textContent = "Đưa camera vào hình vẽ…";
+    const now = clock.getElapsedTime();
+    if (have && tpl) { liteActive = true; lowSince = 0; liteConf = 0.7; } // chuyển sang bám dự phòng
+    else hideBunny(now);
   };
   renderer.domElement.addEventListener("pointerdown", () => actor.hop(clock.getElapsedTime()));
 
   await mindar.start();
   hint.hidden = false;
   renderer.setAnimationLoop(() => {
+    const now = clock.getElapsedTime();
     // bù chuyển động xoay của điện thoại giữa các lần đo
     if (gyro.ok) {
       if (gPrevOk && have) {
@@ -287,13 +381,16 @@ async function startAR() {
       }
       gPrev.copy(gyro.q); gPrevOk = true;
     }
-    holder.visible = anchor.group.visible && have;
-    if (have) holder.matrix.compose(sPos, uprightQuat(sQuat), one.setScalar(sScale));
+    if (liteActive && have) liteStep(now);
+    const shown = have && (anchor.group.visible || liteActive);
+    holder.visible = shown;
+    if (shown) holder.matrix.compose(sPos, uprightQuat(sQuat), one.setScalar(sScale));
     holder.matrixWorldNeedsUpdate = true;
-    actor.update(clock.getElapsedTime());
+    setOpacity(liteActive ? 0.4 + 0.6 * Math.min(1, Math.max(0, (liteConf - 0.3) / 0.45)) : 1);
+    actor.update(now);
     renderer.render(scene, camera);
   });
-  window.__ar = { mindar, anchor, holder, actor, gyro };
+  window.__ar = { mindar, anchor, holder, actor, gyro, get lite() { return { liteActive, liteConf, tpl: !!tpl }; } };
 }
 
 // ---------- chế độ xem thử (không camera) ----------
