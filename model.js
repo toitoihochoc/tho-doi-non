@@ -16,10 +16,11 @@
       white: 0xffffff,
       bow: 0xe8455a,
       bowDark: 0xb8283f,
-      shoe: 0x9a6a43,
+      shoe: 0x8f5f3c,
       shoeLight: 0xbc8b5f,
       shoeDark: 0x5a3a24,
       cream: 0xf6efe3,
+      accent: 0xf0702a,
     };
 
     // ---------- materials ----------
@@ -73,6 +74,11 @@
 
     const bunny = new THREE.Group();
     bunny.name = 'HatBunny';
+    // phần thân trên (mọi thứ trừ giày), nâng lên để lộ đôi giày
+    const up = new THREE.Group();
+    up.name = 'Upper';
+    up.position.y = 0.2;
+    bunny.add(up);
 
     // ---------- body ----------
     const bodyPts = [
@@ -82,46 +88,34 @@
     const bodyGeo = new THREE.LatheGeometry(bodyPts, 48);
     bodyGeo.scale(1, 1, 0.9);
     const body = part(bodyGeo, C.fur, 'Fur_Body');
-    bunny.add(body);
+    up.add(body);
 
-    // giày sneaker nâu quá khổ (thay cho bàn chân)
-    const UP = { rx: 0.25, ry: 0.16, rz: 0.44, y: 0.16, z: 0.06 }; // thân giày
-    const upperTop = (z) => UP.y + UP.ry * Math.sqrt(Math.max(0, 1 - ((z - UP.z) / UP.rz) ** 2));
+    // giày boot đồ chơi nâu quá khổ: mũi tròn to, cổ giày ôm chân, đế nâu đậm, vạch màu bên hông
     for (const s of [-1, 1]) {
       const shoe = new THREE.Group();
-      shoe.name = 'Sneaker' + (s < 0 ? 'L' : 'R');
+      shoe.name = "Shoe" + (s < 0 ? "L" : "R");
       shoe.position.set(0.25 * s, 0, 0.1);
       shoe.rotation.y = 0.15 * s;
 
-      const outsole = part(ellip(0.29, 0.04, 0.52, 48), C.shoeDark, 'ShoeDark_Outsole');
-      outsole.position.set(0, 0.035, 0.08);
-      const midsole = part(ellip(0.28, 0.06, 0.5, 48), C.cream, 'Cream_Midsole');
-      midsole.position.set(0, 0.075, 0.08);
-      const upper = part(ellip(UP.rx, UP.ry, UP.rz, 48), C.shoe, 'Shoe_Upper');
-      upper.position.set(0, UP.y, UP.z);
-      const toe = part(ellip(0.2, 0.12, 0.18, 32), C.shoeLight, 'ShoeLight_Toe');
-      toe.position.set(0, 0.14, 0.38);
-      const collarGeo = new THREE.TorusGeometry(0.14, 0.035, 10, 32);
-      collarGeo.rotateX(-Math.PI / 2);
-      const collar = part(collarGeo, C.shoeDark, 'ShoeDark_Collar');
-      collar.position.set(0, 0.3, -0.08);
-      const tongue = part(ellip(0.1, 0.035, 0.12, 24), C.shoeLight, 'ShoeLight_Tongue');
-      tongue.position.set(0, 0.32, 0.06);
-      tongue.rotation.x = 0.35;
-      shoe.add(outsole, midsole, upper, toe, collar, tongue);
+      const sole = part(ellip(0.265, 0.06, 0.41, 48), C.shoeDark, "ShoeDark_Sole");
+      sole.position.set(0, 0.06, 0.1);
+      const toe = part(ellip(0.245, 0.165, 0.385, 48), C.shoe, "Shoe_Body");
+      toe.position.set(0, 0.17, 0.1);
+      const ankle = part(ellip(0.165, 0.18, 0.165, 40), C.shoe, "Shoe_Ankle");
+      ankle.position.set(0, 0.27, -0.07);
+      const cuffGeo = new THREE.TorusGeometry(0.135, 0.03, 10, 32);
+      cuffGeo.rotateX(-Math.PI / 2);
+      const cuff = part(cuffGeo, C.shoeDark, "ShoeDark_Cuff");
+      cuff.position.set(0, 0.42, -0.07);
+      shoe.add(sole, toe, ankle, cuff);
 
-      // dây giày
-      for (const z of [0.13, 0.2, 0.27]) {
-        const lace = part(new THREE.CapsuleGeometry(0.02, 0.16, 4, 8), C.white, 'White_Lace', false);
-        lace.rotation.z = Math.PI / 2;
-        lace.position.set(0, upperTop(z) + 0.008, z);
-        shoe.add(lace);
-      }
-      // miếng tròn trang trí bên hông
-      const patch = part(ellip(0.055, 0.055, 0.012, 20), C.cream, 'Cream_Patch', false);
-      patch.position.set(0.252 * s, 0.17, 0.02);
-      patch.rotation.y = (Math.PI / 2) * s;
-      shoe.add(patch);
+      // vạch màu hình viên thuốc bên hông (ngoài)
+      const pillGeo = new THREE.CapsuleGeometry(0.034, 0.14, 6, 12);
+      pillGeo.rotateX(Math.PI / 2);
+      pillGeo.scale(0.6, 1, 1);
+      const pill = part(pillGeo, C.accent, "Accent_Pill", false);
+      pill.position.set(0.24 * s, 0.19, 0.1);
+      shoe.add(pill);
 
       bunny.add(shoe);
     }
@@ -132,7 +126,7 @@
       const arm = part(ellip(0.1, 0.21, 0.1), C.fur, 'Fur_Arm' + (s < 0 ? 'L' : 'R'));
       arm.position.set(0.39 * s, 0.7, 0.03);
       arm.rotation.z = 0.35 * s;
-      bunny.add(arm);
+      up.add(arm);
       arms.push(arm);
     }
 
@@ -141,7 +135,7 @@
       const flap = part(ellip(0.13, 0.055, 0.025, 24), C.fur, 'Fur_Collar' + (s < 0 ? 'L' : 'R'));
       flap.position.set(0.17 * s, 1.03, 0.24);
       flap.rotation.set(-0.35, 0.55 * s, -0.45 * s);
-      bunny.add(flap);
+      up.add(flap);
     }
 
     // bow tie
@@ -169,18 +163,18 @@
     const knot = part(ellip(0.04, 0.045, 0.04, 20), C.bowDark, 'BowDark_Knot');
     knot.position.z = 0.01;
     bow.add(knot);
-    bunny.add(bow);
+    up.add(bow);
 
     // tail
     const tail = part(ellip(0.12, 0.12, 0.11, 24), C.fur, 'Fur_Tail');
     tail.position.set(0.2, 0.42, -0.36);
-    bunny.add(tail);
+    up.add(tail);
 
     // ---------- head ----------
     const headPivot = new THREE.Group();
     headPivot.name = 'HeadPivot';
     headPivot.position.set(0, 1.12, 0);
-    bunny.add(headPivot);
+    up.add(headPivot);
 
     const HA = 0.62, HB = 0.57, HC = 0.58;
     const head = part(ellip(HA, HB, HC, 56), C.fur, 'Fur_Head');
