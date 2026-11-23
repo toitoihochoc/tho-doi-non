@@ -32,8 +32,8 @@
 </div>
 <div id="hint" hidden><span id="hintText">Đưa camera vào hình vẽ…</span></div>
 
-<script src="model.js?v=13"></script>
-<script src="tracker.js?v=2"></script>
+<script src="model.js?v=14"></script>
+<script src="tracker.js?v=3"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -128,7 +128,7 @@ function makeActor() {
   }
 
   reset();
-  return { root, update, jump, hop, reset, get state() { return state; } };
+  return { root, update, jump, hop, reset, lookAt: (v) => B.lookAt(v), get state() { return state; } };
 }
 
 function addLights(scene) {
@@ -211,26 +211,43 @@ async function startAR() {
   scene.add(holder);
 
   // ----- bộ ổn định vị trí -----
-  // Trang giấy đứng yên trong phòng. Ta lưu vị trí thỏ trong "hệ phòng" (camera đã bỏ phần xoay nhờ con quay):
+  // Trang giấy đứng yên trong phòng. Ta lưu vị trí thỏ trong "hệ phòng" (đã bỏ phần xoay của điện thoại nhờ con quay):
   //  • xoay điện thoại → con quay bù ngay lập tức, không trễ
-  //  • phép đo của camera (nhiễu) → qua bộ lọc One Euro: đứng yên thì lọc rất mạnh, di chuyển thì bám nhanh
+  //  • phép đo của camera (nhiễu) → bộ lọc thích ứng: đứng yên thì lọc rất êm, di chuyển thật thì bám nhanh
   //  • bỏ phép đo hỏng (méo, nhảy vọt); hỏng liên tục thì ẩn thỏ
   //  • ma trận cứng, tỉ lệ đều → không bị dẹt; hướng "lên" theo trọng lực → luôn đứng thẳng
-  const CAM_LAG = 0.07; // độ trễ ước tính của khung hình camera so với con quay (giây)
+  //  • độ trễ camera so với con quay được tự đo khi bạn xoay máy
+  const LAGS = [0.02, 0.05, 0.08, 0.11, 0.14, 0.18];
+  const lagErr = LAGS.map(() => 0);
+  let camLag = 0.08;
   const wPos = new THREE.Vector3(), wQuat = new THREE.Quaternion();
   let sScale = 1, have = false, rejects = 0, lastMeasT = 0;
-  const mPos = new THREE.Vector3(), mQuat = new THREE.Quaternion(), mScl = new THREE.Vector3();
+  const mPos = new THREE.Vector3(), mQuat = new THREE.Quaternion(), mScl = new THREE.Vector3(), mCam = new THREE.Vector3();
   const cPos = new THREE.Vector3(), cQuat = new THREE.Quaternion();
   let cScale = 1, cand = false;
-  const qM = new THREE.Quaternion(), qR = new THREE.Quaternion(), qRi = new THREE.Quaternion(), one = new THREE.Vector3();
+  const qM = new THREE.Quaternion(), qA = new THREE.Quaternion(), qB = new THREE.Quaternion();
+  const qR = new THREE.Quaternion(), qRi = new THREE.Quaternion(), one = new THREE.Vector3(), tmpV = new THREE.Vector3();
   const sPos = new THREE.Vector3(), sQuat = new THREE.Quaternion(); // tư thế trong khung camera để vẽ
   const nowS = () => performance.now() / 1000;
   const camQAt = (t, out) => (gyro.ok ? gyroAt(t, out) : out.identity());
 
-  // bộ lọc thích ứng cho vị trí, tách thành HƯỚNG nhìn (thỏ ở đâu trên màn hình) và KHOẢNG CÁCH (thỏ to/nhỏ).
-  // Nhiễu của camera chủ yếu nằm ở khoảng cách → lọc khoảng cách mạnh hơn, hướng thì vừa phải.
+  // hướng đứng theo trọng lực, tính thẳng trong hệ phòng (trục "lên" của phòng là +Y)
+  const upW = new THREE.Vector3(0, 1, 0), nW = new THREE.Vector3(), xW = new THREE.Vector3(), yW = new THREE.Vector3();
+  const basis = new THREE.Matrix4();
+  function uprightWorld(q) {
+    if (!gyro.ok) return q;
+    nW.set(0, 0, 1).applyQuaternion(q);
+    if (nW.angleTo(upW) > 1.0) return q; // trang giấy dựng đứng (trên tường…) → giữ hướng camera đo
+    xW.set(1, 0, 0).applyQuaternion(q);
+    xW.addScaledVector(upW, -xW.dot(upW)).normalize();
+    yW.crossVectors(upW, xW);
+    basis.makeBasis(xW, yW, upW);
+    return q.setFromRotationMatrix(basis);
+  }
+
+  // bộ lọc thích ứng, tách HƯỚNG nhìn (thỏ ở đâu trên màn hình) và KHOẢNG CÁCH (thỏ to/nhỏ)
   const wDir = new THREE.Vector3(0, 0, -1), rDir = new THREE.Vector3();
-  let wLogD = 0, angVel = 0, logVel = 0;
+  let wLogD = 0, angVel = 0, logVel = 0, qVel = 0;
   const lowpass = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
   function resetPos(raw) {
     wLogD = Math.log(raw.length()); wDir.copy(raw).normalize(); angVel = 0; logVel = 0;
@@ -240,25 +257,38 @@ async function startAR() {
     const d = raw.length();
     rDir.copy(raw).divideScalar(d);
     const lg = Math.log(d);
-    // tốc độ ước lượng (đã làm mượt) để biết đang đứng yên hay đang di chuyển thật
     angVel += (wDir.angleTo(rDir) / dt - angVel) * lowpass(0.8, dt);
     logVel += (Math.abs(lg - wLogD) / dt - logVel) * lowpass(0.8, dt);
-    // đứng yên: lọc rất êm — di chuyển: bám nhanh
-    wDir.lerp(rDir, lowpass(0.5 + 40 * angVel, dt)).normalize();
-    wLogD += (lg - wLogD) * lowpass(0.2 + 1.5 * Math.max(0, logVel - 0.15), dt);
+    // đứng yên: lọc rất êm (~0.35Hz) — di chuyển thật: tần số cắt tăng theo tốc độ → bám nhanh
+    wDir.lerp(rDir, lowpass(0.35 + 40 * Math.max(0, angVel - 0.004), dt)).normalize();
+    wLogD += (lg - wLogD) * lowpass(0.12 + 1.5 * Math.max(0, logVel - 0.15), dt);
     wPos.copy(wDir).multiplyScalar(Math.exp(wLogD));
   }
-  let qVel = 0;
   function filterQuat(raw, dt) {
     qVel += (wQuat.angleTo(raw) / dt - qVel) * lowpass(0.8, dt);
-    wQuat.slerp(raw, lowpass(0.4 + 2 * Math.max(0, qVel - 0.3), dt));
+    wQuat.slerp(raw, lowpass(0.25 + 2 * Math.max(0, qVel - 0.3), dt));
+  }
+
+  // tự đo độ trễ camera: khi xoay máy, chọn độ trễ làm phép đo khớp nhất với vị trí đã ổn định
+  function learnLag(pCam, t) {
+    if (!gyro.ok || !have) return;
+    gyroAt(t - 0.02, qA); gyroAt(t - 0.12, qB);
+    if (qA.angleTo(qB) / 0.1 < 0.3) return; // chỉ học khi đang xoay đủ nhanh
+    let best = 0;
+    for (let i = 0; i < LAGS.length; i++) {
+      gyroAt(t - LAGS[i], qM);
+      tmpV.copy(pCam).applyQuaternion(qM);
+      lagErr[i] = lagErr[i] * 0.92 + tmpV.angleTo(wDir) * 0.08;
+      if (lagErr[i] < lagErr[best]) best = i;
+    }
+    camLag += (LAGS[best] - camLag) * 0.2;
   }
 
   // đưa một tư thế trong khung camera (đo tại thời điểm tMeas) về hệ phòng
   function toWorld(pCam, qCam, tMeas, outP, outQ) {
-    camQAt(tMeas - CAM_LAG, qM);
+    camQAt(tMeas - camLag, qM);
     outP.copy(pCam).applyQuaternion(qM);
-    outQ.copy(qM).multiply(qCam);
+    if (outQ) outQ.copy(qM).multiply(qCam);
   }
 
   function differs(pos, quat, s, refPos, refQuat, refS) {
@@ -272,7 +302,10 @@ async function startAR() {
     const s = (sx + sy) / 2;
     const aniso = Math.max(sx, sy) / Math.max(1e-6, Math.min(sx, sy));
     if (aniso > 1.3) { if (have && ++rejects > 6) have = false; return; }
+    mCam.copy(mPos);
+    learnLag(mCam, t);
     toWorld(mPos, mQuat, t, mPos, mQuat);
+    uprightWorld(mQuat);
 
     if (!have) {
       // cần 2 phép đo liên tiếp khớp nhau mới cho thỏ hiện (tránh hiện sai chỗ)
@@ -297,34 +330,18 @@ async function startAR() {
     lastMeasT = t;
     filterPos(mPos, dt);
     filterQuat(mQuat, dt);
-    sScale += (s - sScale) * 0.05; // kích thước thật của hình vẽ không đổi → chỉ chỉnh rất chậm
+    sScale += (s - sScale) * 0.03; // kích thước thật của hình vẽ không đổi → chỉ chỉnh rất chậm
   }
 
-  // tính tư thế trong khung camera để vẽ (dùng hướng điện thoại tại thời điểm khung hình đang hiển thị)
+  // tư thế trong khung camera để vẽ (hướng điện thoại tại thời điểm khung hình đang hiển thị)
   function updateRenderPose() {
-    camQAt(nowS() - CAM_LAG, qR);
+    camQAt(nowS() - camLag, qR);
     qRi.copy(qR).invert();
     sPos.copy(wPos).applyQuaternion(qRi);
     sQuat.copy(qRi).multiply(wQuat);
   }
 
-  // hướng đứng theo trọng lực
-  const upW = new THREE.Vector3(0, 1, 0), upC = new THREE.Vector3(), nC = new THREE.Vector3();
-  const xC = new THREE.Vector3(), yC = new THREE.Vector3(), basis = new THREE.Matrix4();
-  const qInv = new THREE.Quaternion(), qOut = new THREE.Quaternion();
-  function uprightQuat(q) {
-    if (!gyro.ok) return q;
-    upC.copy(upW).applyQuaternion(qInv.copy(gyro.q).invert());
-    nC.set(0, 0, 1).applyQuaternion(q);
-    if (nC.angleTo(upC) > 1.0) return q; // trang giấy dựng đứng (trên tường…) → dùng hướng camera đo
-    xC.set(1, 0, 0).applyQuaternion(q);
-    xC.addScaledVector(upC, -xC.dot(upC)).normalize();
-    yC.crossVectors(upC, xC);
-    basis.makeBasis(xC, yC, upC);
-    return qOut.setFromRotationMatrix(basis);
-  }
-
-  // ----- bộ bám hình dự phòng: khi MindAR mất dấu (xa / nhòe) vẫn "ghim" thỏ vào hình vẽ -----
+  // ----- chiếu điểm 3D ↔ ảnh làm việc (ảnh camera thu nhỏ 320px) -----
   const LT = window.LiteTracker;
   const container = document.getElementById("ar");
   const WW = 320; let WH = 0, gray = null;
@@ -340,37 +357,51 @@ async function startAR() {
     for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
     return true;
   }
+  let cR = null, vR = null;
+  function refreshRects() { cR = container.getBoundingClientRect(); vR = mindar.video.getBoundingClientRect(); }
   const pv = new THREE.Vector3(), invP = new THREE.Matrix4(), wp = { x: 0, y: 0, z: 0 };
   function camToWork(p, out) {
     pv.copy(p).applyMatrix4(camera.projectionMatrix);
-    const c = container.getBoundingClientRect(), vr = mindar.video.getBoundingClientRect();
-    const sx = ((pv.x + 1) / 2) * c.width + c.left, sy = ((1 - pv.y) / 2) * c.height + c.top;
-    out.x = ((sx - vr.left) / vr.width) * WW; out.y = ((sy - vr.top) / vr.height) * WH; out.z = pv.z;
+    const sx = ((pv.x + 1) / 2) * cR.width + cR.left, sy = ((1 - pv.y) / 2) * cR.height + cR.top;
+    out.x = ((sx - vR.left) / vR.width) * WW; out.y = ((sy - vR.top) / vR.height) * WH; out.z = pv.z;
     return out;
   }
   function workToRay(x, y, out) {
-    const c = container.getBoundingClientRect(), vr = mindar.video.getBoundingClientRect();
-    const sx = (x / WW) * vr.width + vr.left, sy = (y / WH) * vr.height + vr.top;
-    const nx = ((sx - c.left) / c.width) * 2 - 1, ny = 1 - ((sy - c.top) / c.height) * 2;
+    const sx = (x / WW) * vR.width + vR.left, sy = (y / WH) * vR.height + vR.top;
+    const nx = ((sx - cR.left) / cR.width) * 2 - 1, ny = 1 - ((sy - cR.top) / cR.height) * 2;
     invP.copy(camera.projectionMatrix).invert();
     return out.set(nx, ny, 0.5).applyMatrix4(invP).normalize();
   }
 
-  let tpl = null, capDist = 1, updCount = 0;
-  const tC = new THREE.Vector3(), tK = new THREE.Vector3();
+  // ----- bộ bám hình dự phòng HIỂU PHỐI CẢNH -----
+  // Mẫu được lưu theo toạ độ TRÊN MẶT GIẤY. Mỗi khung hình, lưới điểm mẫu được chiếu lại theo góc nhìn hiện tại
+  // (biết nhờ trọng lực + con quay) → nhìn chéo / từ góc thấp hình vẽ bị ép dẹt vẫn khớp đúng.
+  const NU = 30, NV = 38, NT = NU * NV;
+  const tplU = new Float32Array(NT), tplV = new Float32Array(NT);
+  for (let j = 0, k = 0; j < NV; j++) for (let i = 0; i < NU; i++, k++) {
+    tplU[k] = -0.44 + (0.88 * (i + 0.5)) / NU;
+    tplV[k] = (-0.44 + (0.88 * (j + 0.5)) / NV) * TARGET_H;
+  }
+  const px = new Float32Array(NT), py = new Float32Array(NT);
+  const projM = new THREE.Matrix4();
+  // chiếu toàn bộ lưới mẫu qua ma trận tư thế m → toạ độ ảnh làm việc; trả về tâm
+  function projectGrid(m, center) {
+    for (let k = 0; k < NT; k++) {
+      camToWork(tmpV.set(tplU[k], tplV[k], 0).applyMatrix4(m), wp);
+      px[k] = wp.x; py[k] = wp.y;
+    }
+    camToWork(tmpV.set(0, 0, 0).applyMatrix4(m), center);
+    return center;
+  }
+
+  let tpl = null, updCount = 0;
+  const cen = { x: 0, y: 0, z: 0 };
   function captureTemplate(m) {
     if (!grab()) return;
-    tC.setFromMatrixPosition(m);
-    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-    for (const [cx, cy] of [[-0.5, -TARGET_H / 2], [0.5, -TARGET_H / 2], [0.5, TARGET_H / 2], [-0.5, TARGET_H / 2]]) {
-      camToWork(tK.set(cx, cy, 0).applyMatrix4(m), wp);
-      x0 = Math.min(x0, wp.x); x1 = Math.max(x1, wp.x); y0 = Math.min(y0, wp.y); y1 = Math.max(y1, wp.y);
-    }
-    camToWork(tC, wp);
-    const hw = ((x1 - x0) / 2) * 0.85, hh = ((y1 - y0) / 2) * 0.85;
-    if (hw < 6 || hh < 6) return;
-    const t = LT.createTemplate(gray, WW, WH, wp.x, wp.y, hw, hh);
-    if (t) { tpl = t; capDist = tC.length(); }
+    refreshRects();
+    projectGrid(m, cen);
+    const t = LT.createPlanarTemplate(gray, WW, WH, px, py, cen.x, cen.y);
+    if (t) tpl = t;
   }
 
   let liteActive = false, liteConf = 0, lowSince = 0, lostAt = -99;
@@ -381,44 +412,50 @@ async function startAR() {
     hint.hidden = false;
     hintText.textContent = "Đưa camera vào hình vẽ…";
   }
-  const liteRaw = new THREE.Vector3(), liteQ = new THREE.Quaternion();
-  let liteS = 1;
+  const liteRaw = new THREE.Vector3();
   function liteStep(now) {
     updateRenderPose();
     camToWork(sPos, wp);
     // hình vẽ ra khỏi khung hình → thỏ biến mất
     if (wp.z > 1 || wp.x < -8 || wp.x > WW + 8 || wp.y < -8 || wp.y > WH + 8) { hideBunny(now); return; }
     if (!grab()) return;
-    const sPred = capDist / sPos.length();
-    const r = LT.match(gray, WW, WH, tpl, wp.x, wp.y, sPred, 16);
-    liteS += (r.s - liteS) * 0.25; // tỉ lệ đo theo bậc → làm mượt để thỏ không to nhỏ giật cục
+    // xếp lại lưới mẫu theo góc nhìn hiện tại rồi so khớp quanh vị trí dự đoán
+    projM.compose(sPos, sQuat, one.setScalar(sScale));
+    projectGrid(projM, cen);
+    LT.layoutTemplate(tpl, px, py, cen.x, cen.y);
+    const r = LT.match(gray, WW, WH, tpl, cen.x, cen.y, 1, 14);
     liteConf += (Math.max(0, r.conf) - liteConf) * 0.3;
-    if (r.conf > 0.3) {
+    if (r.conf > 0.4) {
       lowSince = 0;
       workToRay(r.x, r.y, ray);
-      tgt.copy(ray).multiplyScalar(capDist / liteS);
+      tgt.copy(ray).multiplyScalar(sPos.length() / r.s);
       const t = nowS();
-      toWorld(tgt, sQuat, t, liteRaw, liteQ);
+      toWorld(tgt, null, t, liteRaw, null);
       const dt = Math.min(0.2, Math.max(0.005, t - lastMeasT));
       lastMeasT = t;
       filterPos(liteRaw, dt);
-    } else {
+    } else if (r.conf < 0.3) {
       if (!lowSince) lowSince = now;
-      if (now - lowSince > 0.8) hideBunny(now); // không tìm thấy hình vẽ nữa
+      if (now - lowSince > 1.2) hideBunny(now); // không tìm thấy hình vẽ nữa
     }
+    // 0.3–0.4: chưa chắc → giữ nguyên vị trí (con quay vẫn bù khi xoay máy)
   }
 
-  // độ mờ: bám chắc = rõ nét, đang bám dự phòng (xa / nhòe) = mờ dần theo độ tin cậy
+  // độ mờ: CHỈ theo khoảng cách thật (hình vẽ chiếm bao nhiêu bề ngang màn hình), không theo độ nhòe/góc nhìn
   const mats = new Set();
   actor.root.children[1].traverse((o) => { if (o.material) mats.add(o.material); });
   let opacity = 1;
   function setOpacity(o) {
-    opacity += (o - opacity) * 0.15;
+    opacity += (o - opacity) * 0.1;
     const tr = opacity < 0.99;
     for (const m of mats) {
       if (m.transparent !== tr) { m.transparent = tr; m.needsUpdate = true; }
       m.opacity = tr ? opacity : 1;
     }
+  }
+  function distanceOpacity() {
+    const frac = (camera.projectionMatrix.elements[0] * sScale) / (2 * Math.max(1e-6, sPos.length()));
+    return frac >= 0.12 ? 1 : frac <= 0.04 ? 0.35 : 0.35 + (0.65 * (frac - 0.04)) / 0.08;
   }
 
   anchor.onTargetFound = () => {
@@ -435,26 +472,29 @@ async function startAR() {
   };
   anchor.onTargetLost = () => {
     const now = clock.getElapsedTime();
-    if (have && tpl) { liteActive = true; lowSince = 0; liteConf = 0.7; updateRenderPose(); liteS = capDist / sPos.length(); } // chuyển sang bám dự phòng
+    if (have && tpl) { liteActive = true; lowSince = 0; liteConf = 0.7; } // chuyển sang bám dự phòng
     else hideBunny(now);
   };
   renderer.domElement.addEventListener("pointerdown", () => actor.hop(clock.getElapsedTime()));
 
+  const camWorld = new THREE.Vector3(0, 0, 0); // camera của MindAR đứng ở gốc toạ độ
   await mindar.start();
   hint.hidden = false;
   renderer.setAnimationLoop(() => {
     const now = clock.getElapsedTime();
+    refreshRects();
     if (liteActive && have) liteStep(now);
     if (have) updateRenderPose();
     const shown = have && (anchor.group.visible || liteActive);
     holder.visible = shown;
-    if (shown) holder.matrix.compose(sPos, uprightQuat(sQuat), one.setScalar(sScale));
+    if (shown) holder.matrix.compose(sPos, sQuat, one.setScalar(sScale));
     holder.matrixWorldNeedsUpdate = true;
-    setOpacity(liteActive ? 0.4 + 0.6 * Math.min(1, Math.max(0, (liteConf - 0.3) / 0.45)) : 1);
+    if (shown) setOpacity(distanceOpacity());
+    actor.lookAt(camWorld); // đầu + mắt thỏ nhìn theo camera
     actor.update(now);
     renderer.render(scene, camera);
   });
-  window.__ar = { mindar, anchor, holder, actor, gyro, get lite() { return { liteActive, liteConf, tpl: !!tpl }; } };
+  window.__ar = { mindar, anchor, holder, actor, gyro, get lite() { return { liteActive, liteConf, tpl: !!tpl, camLag }; } };
 }
 
 // ---------- chế độ xem thử (không camera) ----------
@@ -497,6 +537,7 @@ async function startDemo() {
     renderer.setSize(innerWidth, innerHeight);
   });
   renderer.setAnimationLoop(() => {
+    actor.lookAt(camera.position);
     actor.update(clock.getElapsedTime());
     renderer.render(scene, camera);
   });

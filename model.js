@@ -356,10 +356,41 @@
       const R = arms[1];
       R.rotation.z = ARM_REST + k * 2.15 + k * Math.sin(t * 11) * 0.35;
       R.rotation.x = -k * 0.25;
+
+      updateLook();
       return k;
     }
 
-    return { root: bunny, head, headPivot, ears, arms, hat, body, update, greet };
+    // ---------- đầu + mắt nhìn theo một điểm (camera) ----------
+    // Đầu quay tối đa ±50° ngang, ngẩng 30° / cúi 25°; phần còn thiếu thì con ngươi liếc thêm.
+    headPivot.rotation.order = 'YXZ';
+    const lookTarget = new THREE.Vector3(), lv = new THREE.Vector3();
+    const headCenter = new THREE.Vector3(0, 0.5, 0);
+    let hasLook = false, curYaw = 0, curPitch = 0, eyeX = 0, eyeY = 0;
+    function lookAt(worldPos) { lookTarget.copy(worldPos); hasLook = true; }
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    function updateLook() {
+      if (!hasLook) return;
+      const parent = headPivot.parent;
+      parent.updateWorldMatrix(true, false);
+      lv.copy(lookTarget);
+      parent.worldToLocal(lv);
+      lv.sub(headCenter).sub(headPivot.position);
+      const yaw = Math.atan2(lv.x, lv.z);
+      const pitch = Math.atan2(lv.y, Math.hypot(lv.x, lv.z));
+      const hy = clamp(yaw, -0.87, 0.87), hp = clamp(pitch, -0.45, 0.52);
+      // quay đầu êm, không giật theo từng rung nhỏ của camera
+      curYaw += (hy - curYaw) * 0.08;
+      curPitch += (hp - curPitch) * 0.08;
+      headPivot.rotation.y = curYaw;
+      headPivot.rotation.x = -curPitch;
+      // con ngươi liếc nốt phần đầu chưa quay tới
+      eyeX += (clamp((yaw - curYaw) * 0.06, -0.03, 0.03) - eyeX) * 0.15;
+      eyeY += (clamp((pitch - curPitch) * 0.06, -0.025, 0.025) - eyeY) * 0.15;
+      for (const e of openEyes) e.position.set(eyeX, eyeY, 0);
+    }
+
+    return { root: bunny, head, headPivot, ears, arms, hat, body, update, greet, lookAt };
   }
 
   if (typeof module !== 'undefined' && module.exports) module.exports = { buildBunny };

@@ -77,7 +77,35 @@
     return { x: best.x + fx, y: best.y + fy, s: best.s * (1 + 0.03 * fs), conf: c0 };
   }
 
-  const api = { sample, createTemplate, ncc, match };
+  // Mẫu theo mặt giấy: px/py là vị trí (ảnh làm việc) của lưới điểm trên trang giấy khi chụp mẫu.
+  // Giá trị lấy tại đó; độ lệch dx/dy được xếp lại mỗi khung bằng layoutTemplate theo góc nhìn hiện tại.
+  function createPlanarTemplate(g, W, H, px, py, cx, cy) {
+    const n = px.length;
+    const v = new Float32Array(n), dx = new Float32Array(n), dy = new Float32Array(n);
+    let sum = 0, cnt = 0;
+    for (let k = 0; k < n; k++) {
+      const p = sample(g, W, H, px[k], py[k]);
+      if (Number.isNaN(p)) return null; // cả vùng mẫu phải nằm trong khung
+      v[k] = p; sum += p; cnt++;
+      dx[k] = px[k] - cx; dy[k] = py[k] - cy;
+    }
+    const mean = sum / cnt;
+    let ss = 0;
+    for (let k = 0; k < n; k++) { v[k] -= mean; ss += v[k] * v[k]; }
+    if (Math.sqrt(ss / n) < 4) return null;
+    const norm = Math.sqrt(ss);
+    for (let k = 0; k < n; k++) v[k] /= norm;
+    // vùng mẫu quá nhỏ trên ảnh (ở rất xa) thì không đủ chi tiết
+    let x0 = 1e9, x1 = -1e9;
+    for (let k = 0; k < n; k++) { x0 = Math.min(x0, px[k]); x1 = Math.max(x1, px[k]); }
+    if (x1 - x0 < 14) return null;
+    return { dx, dy, v, n };
+  }
+  function layoutTemplate(t, px, py, cx, cy) {
+    for (let k = 0; k < t.n; k++) { t.dx[k] = px[k] - cx; t.dy[k] = py[k] - cy; }
+  }
+
+  const api = { sample, createTemplate, createPlanarTemplate, layoutTemplate, ncc, match };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.LiteTracker = api;
 })(typeof window !== 'undefined' ? window : globalThis);
