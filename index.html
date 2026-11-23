@@ -145,36 +145,93 @@ function addLights(scene) {
 
 const clock = new THREE.Clock();
 
+// ---------- con quay hồi chuyển: giữ góc nhìn khi tạm mất dấu hình vẽ ----------
+const gyro = { q: new THREE.Quaternion(), ok: false };
+function listenGyro() {
+  const zee = new THREE.Vector3(0, 0, 1), eul = new THREE.Euler(), qS = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+  const D = THREE.MathUtils.DEG2RAD;
+  addEventListener("deviceorientation", (e) => {
+    if (e.alpha == null) return;
+    const orient = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * D;
+    eul.set(e.beta * D, e.alpha * D, -e.gamma * D, "YXZ");
+    gyro.q.setFromEuler(eul).multiply(q1).multiply(qS.setFromAxisAngle(zee, -orient));
+    gyro.ok = true;
+  });
+}
+// iOS bắt buộc xin quyền ngay trong lúc bấm nút
+function askGyroPermission() {
+  try {
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      return DeviceOrientationEvent.requestPermission().then((r) => r === "granted").catch(() => false);
+    }
+  } catch (e) {}
+  return Promise.resolve(true);
+}
+
 // ---------- chế độ AR thật ----------
+const REJUMP_AFTER = 8; // mất dấu lâu hơn 8 giây thì thỏ nhảy ra lại từ đầu
 async function startAR() {
-  const { MindARThree } = await import('mindar-image-three');
+  const { MindARThree } = await import("mindar-image-three");
   const mindar = new MindARThree({
-    container: document.getElementById('ar'),
-    imageTargetSrc: './targets.mind',
-    uiScanning: 'no',
-    uiLoading: 'yes',
-    filterMinCF: 0.0005,
-    filterBeta: 0.001,
-    missTolerance: 10,
-    warmupTolerance: 3,
+    container: document.getElementById("ar"),
+    imageTargetSrc: "./targets.mind",
+    uiScanning: "no",
+    uiLoading: "yes",
+    filterMinCF: 0.0005, // chống rung nhẹ
+    filterBeta: 50,      // bám nhanh theo chuyển động camera (trước đây quá trễ)
+    missTolerance: 5,
+    warmupTolerance: 2,
   });
   const { renderer, scene, camera } = mindar;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   addLights(scene);
   const anchor = mindar.addAnchor(0);
   const actor = makeActor();
-  anchor.group.add(actor.root);
 
-  anchor.onTargetFound = () => { actor.jump(clock.getElapsedTime()); hint.hidden = true; };
-  anchor.onTargetLost = () => { actor.reset(); hint.hidden = false; hintText.textContent = 'Đưa camera vào hình vẽ…'; };
-  renderer.domElement.addEventListener('pointerdown', () => actor.hop(clock.getElapsedTime()));
+  // thỏ nằm trong "holder" riêng: khi đang bám hình thì chép vị trí của hình vẽ,
+  // khi mất dấu thì giữ nguyên chỗ cũ và xoay ngược theo con quay để vẫn đứng yên trên trang giấy
+  const holder = new THREE.Group();
+  holder.matrixAutoUpdate = false;
+  holder.add(actor.root);
+  scene.add(holder);
+
+  let tracking = false, holding = false, lostAt = 0;
+  const lastM = new THREE.Matrix4(), lastQ = new THREE.Quaternion(), relQ = new THREE.Quaternion(), rotM = new THREE.Matrix4();
+
+  anchor.onTargetFound = () => {
+    const now = clock.getElapsedTime();
+    tracking = true;
+    hint.hidden = true;
+    if (actor.state === "hidden" || (holding && now - lostAt > REJUMP_AFTER)) actor.jump(now);
+    holding = false;
+  };
+  anchor.onTargetLost = () => {
+    tracking = false;
+    holding = actor.state !== "hidden";
+    lostAt = clock.getElapsedTime();
+    hint.hidden = false;
+    hintText.textContent = holding ? "Thỏ vẫn ở đây · hướng lại vào hình vẽ để bám chính xác" : "Đưa camera vào hình vẽ…";
+  };
+  renderer.domElement.addEventListener("pointerdown", () => actor.hop(clock.getElapsedTime()));
 
   await mindar.start();
   hint.hidden = false;
   renderer.setAnimationLoop(() => {
+    if (tracking) {
+      holder.matrix.copy(anchor.group.matrix);
+      lastM.copy(anchor.group.matrix);
+      lastQ.copy(gyro.q);
+    } else if (holding && gyro.ok) {
+      relQ.copy(gyro.q).invert().multiply(lastQ);
+      holder.matrix.multiplyMatrices(rotM.makeRotationFromQuaternion(relQ), lastM);
+    }
+    holder.visible = tracking || holding;
+    holder.matrixWorldNeedsUpdate = true;
     actor.update(clock.getElapsedTime());
     renderer.render(scene, camera);
   });
+  window.__ar = { mindar, anchor, holder, actor, gyro };
 }
 
 // ---------- chế độ xem thử (không camera) ----------
@@ -227,9 +284,11 @@ if (isDemo) {
   startDemo();
 } else {
   document.getElementById('start').onclick = async () => {
+    const gyroAsk = askGyroPermission(); // gọi ngay khi bấm (yêu cầu của iOS)
     const btn = document.getElementById('start');
     btn.disabled = true; btn.textContent = 'Đang mở camera…';
     try {
+      if (await gyroAsk) listenGyro();
       await startAR();
       intro.remove();
     } catch (e) {
