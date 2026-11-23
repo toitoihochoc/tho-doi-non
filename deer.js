@@ -17,6 +17,8 @@
       ink: 0x2b2326,
       white: 0xffffff,
       mouth: 0x7a2434,
+      sole: 0xa9dcf2,     // dép xanh nhạt
+      strap: 0x4d9fd8,
     };
 
     // ---------- chất liệu nhung mềm (giống chú thỏ) ----------
@@ -40,14 +42,16 @@
     function mat(color, name) {
       if (mats[name]) return mats[name];
       let m;
+      const painted = name === "Paint"; // hoa văn vẽ thẳng lên da (màu theo đỉnh)
+      if (painted) color = 0xffffff;
       if (forExport) {
-        m = new THREE.MeshStandardMaterial({ color, roughness: GLOSSY[name] ?? 0.85, metalness: 0 });
+        m = new THREE.MeshStandardMaterial({ color, roughness: GLOSSY[name] ?? 0.85, metalness: 0, vertexColors: painted });
       } else if (GLOSSY[name] !== undefined) {
         m = new THREE.MeshPhysicalMaterial({ color, roughness: GLOSSY[name], clearcoat: name === 'Ink' || name === 'Nose' ? 0.6 : 0 });
       } else {
-        const sheenColor = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55);
+        const sheenColor = painted ? new THREE.Color(0xf3d9bf) : new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55);
         m = new THREE.MeshPhysicalMaterial({
-          color, roughness: 0.92, metalness: 0,
+          color, roughness: 0.92, metalness: 0, vertexColors: painted,
           sheen: 1, sheenRoughness: 0.55, sheenColor,
           bumpMap: grain, bumpScale: 0.35,
         });
@@ -69,6 +73,20 @@
       return g;
     }
     const Z = new THREE.Vector3(0, 0, 1);
+    const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    // tô màu từng đỉnh: fn(x,y,z) trả về mức pha 0..1 giữa màu nền và màu hoa văn
+    function paint(geo, base, accent, fn) {
+      const p = geo.attributes.position, n = p.count, col = new Float32Array(n * 3);
+      const cb = new THREE.Color(base), ca = new THREE.Color(accent), c = new THREE.Color();
+      for (let i = 0; i < n; i++) {
+        c.copy(cb).lerp(ca, fn(p.getX(i), p.getY(i), p.getZ(i)));
+        col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+      }
+      geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      return geo;
+    }
+    // một đốm hình elip mềm mép: d<1 bên trong
+    const blob = (d) => 1 - smoothstep(0.82, 1.0, d);
     const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
     const deer = new THREE.Group();
@@ -78,45 +96,34 @@
     up.position.y = 0.12;
     deer.add(up);
 
-    // ---------- thân ----------
+    // ---------- thân (ngắn, tròn) ----------
     const bodyPts = [
-      [0, 0.16], [0.27, 0.17], [0.39, 0.23], [0.43, 0.34], [0.42, 0.52],
-      [0.37, 0.78], [0.29, 1.0], [0.17, 1.12], [0, 1.15],
+      [0, 0.16], [0.3, 0.17], [0.44, 0.24], [0.48, 0.37], [0.46, 0.55],
+      [0.39, 0.76], [0.26, 0.92], [0, 0.98],
     ].map((p) => new THREE.Vector2(p[0], p[1]));
-    const bodyGeo = new THREE.LatheGeometry(new THREE.SplineCurve(bodyPts).getPoints(48), 72);
+    const bodyGeo = new THREE.LatheGeometry(new THREE.SplineCurve(bodyPts).getPoints(110), 180);
     bodyGeo.scale(1, 1, 0.9);
-    const body = part(bodyGeo, C.fur, 'Fur_Body');
-    up.add(body);
-    const bodyR = (y) => { // bán kính thân gần đúng theo độ cao (để đặt đốm)
-      const pts = bodyPts;
-      for (let i = 1; i < pts.length; i++) if (y <= pts[i].y) {
-        const a = pts[i - 1], b = pts[i], k = (y - a.y) / (b.y - a.y);
-        return a.x + (b.x - a.x) * k;
+    // hoa văn: yếm kem hình chữ U trước ngực + đốm sao trên lưng/hông — vẽ thẳng lên da, không nổi lên
+    const SPOTS = [[100, 0.52, 0.065], [125, 0.74, 0.055], [140, 0.4, 0.06], [165, 0.62, 0.065], [195, 0.46, 0.06],
+      [215, 0.72, 0.055], [235, 0.36, 0.06], [258, 0.58, 0.055], [180, 0.84, 0.045], [112, 0.3, 0.05], [248, 0.28, 0.05]];
+    paint(bodyGeo, C.fur, C.cream, (x, y, z) => {
+      const a = Math.atan2(x, z / 0.9), r = Math.hypot(x, z / 0.9);
+      // yếm: elip mềm phía trước, đáy tròn như chữ U
+      let k = blob(Math.hypot((a * r) / 0.23, (y - 0.6) / 0.27));
+      for (const [deg, y0, rad] of SPOTS) {
+        let da = a - (deg * Math.PI) / 180;
+        da = Math.atan2(Math.sin(da), Math.cos(da));
+        k = Math.max(k, blob(Math.hypot((da * r) / rad, (y - y0) / (rad * 0.8))));
       }
-      return 0;
-    };
-
-    // yếm kem hình chữ U trước ngực
-    const bib = part(ellip(0.22, 0.34, 0.11), C.cream, 'Cream_Bib');
-    bib.position.set(0, 0.7, 0.27);
-    bib.rotation.x = -0.12;
-    up.add(bib);
-
-    // đốm sao trên lưng và hai bên hông
-    const spotSpots = [[105, 0.55], [130, 0.8], [150, 0.45], [175, 0.7], [205, 0.5], [230, 0.78], [255, 0.42], [120, 0.32], [240, 0.3]];
-    for (const [deg, y] of spotSpots) {
-      const a = (deg * Math.PI) / 180, r = bodyR(y) + 0.005;
-      const n = new THREE.Vector3(Math.sin(a), 0, Math.cos(a) / 0.9).normalize();
-      const spot = part(ellip(0.055, 0.045, 0.014, 24), C.cream, 'Cream_Spot');
-      spot.position.set(Math.sin(a) * r, y, Math.cos(a) * r * 0.9);
-      spot.quaternion.setFromUnitVectors(Z, n);
-      up.add(spot);
-    }
+      return k;
+    });
+    const body = part(bodyGeo, 0xffffff, "Paint_Body");
+    up.add(body);
 
     // đuôi xoăn như đám mây
     const tail = new THREE.Group();
     tail.name = 'Tail';
-    tail.position.set(0.12, 0.45, -0.37);
+    tail.position.set(0.1, 0.4, -0.42);
     for (const [x, y, z, r] of [[0, 0, 0, 0.09], [0.07, 0.07, -0.02, 0.07], [0.09, -0.04, -0.03, 0.065]]) {
       const puff = part(ellip(r, r, r * 0.9, 24), C.cream, 'Cream_Tail');
       puff.position.set(x, y, z);
@@ -125,44 +132,73 @@
     up.add(tail);
 
     // tay (xoay quanh vai để vẫy được)
-    const ARM_REST = 0.35;
+    const ARM_REST = 0.3;
     const arms = [];
     for (const s of [-1, 1]) {
       const pivot = new THREE.Group();
       pivot.name = 'Arm' + (s < 0 ? 'L' : 'R');
-      pivot.position.set(0.33 * s, 0.86, 0.03);
+      pivot.position.set(0.37 * s, 0.74, 0.03);
       pivot.rotation.z = ARM_REST * s;
-      const ag = ellip(0.1, 0.21, 0.1);
+      const ag = new THREE.CapsuleGeometry(0.095, 0.2, 12, 32);
       ag.translate(0, -0.17, 0);
-      const arm = part(ag, C.fur, 'Fur_Arm');
-      const hand = part(ellip(0.075, 0.06, 0.075, 24), C.hoof, 'Hoof_Hand');
-      hand.position.set(0, -0.35, 0);
-      arm.add(hand);
+      paint(ag, C.fur, C.hoof, (x, y) => smoothstep(-0.27, -0.33, y) * 0.85);
+      const arm = part(ag, 0xffffff, "Paint_Arm");
       pivot.add(arm);
       up.add(pivot);
       arms.push(pivot);
     }
 
-    // chân to tròn (móng nâu đậm)
+    // chân + đôi dép quá cỡ (đế dày, quai ngang, quả bông) giống chú thỏ
     for (const s of [-1, 1]) {
-      const foot = part(ellip(0.235, 0.165, 0.31), C.hoof, 'Hoof_Foot' + (s < 0 ? 'L' : 'R'));
-      foot.position.set(0.23 * s, 0.13, 0.1);
-      foot.rotation.y = 0.15 * s;
+      const foot = part(ellip(0.21, 0.13, 0.29), C.hoof, "Hoof_Foot" + (s < 0 ? "L" : "R"));
+      foot.position.set(0.23 * s, 0.13, 0.12);
+      foot.rotation.y = 0.2 * s;
       deer.add(foot);
-      const leg = part(ellip(0.14, 0.12, 0.14), C.fur, 'Fur_Leg');
-      leg.position.set(0.23 * s, 0.3, 0.02);
+      const leg = part(ellip(0.14, 0.12, 0.14), C.fur, "Fur_Leg");
+      leg.position.set(0.23 * s, 0.28, 0.02);
       deer.add(leg);
+
+      const slipper = new THREE.Group();
+      slipper.name = "Slipper" + (s < 0 ? "L" : "R");
+      slipper.position.set(0.24 * s, 0, 0.12);
+      slipper.rotation.y = 0.2 * s;
+      const sole = part(ellip(0.25, 0.055, 0.47, 48), C.sole, "Sole_Slipper");
+      sole.position.set(0, 0.05, 0.1);
+      const strapGeo = new THREE.TorusGeometry(0.21, 0.048, 12, 32, Math.PI);
+      strapGeo.scale(1, 0.95, 1.3);
+      const strap = part(strapGeo, C.strap, "Strap_Slipper");
+      strap.position.set(0, 0.08, 0.2);
+      strap.rotation.x = -0.25;
+      const pom = part(ellip(0.08, 0.075, 0.075, 24), C.cream, "Cream_Pom");
+      pom.position.set(0, 0.3, 0.27);
+      slipper.add(sole, strap, pom);
+      deer.add(slipper);
     }
 
     // ---------- đầu ----------
     const headPivot = new THREE.Group();
     headPivot.name = 'HeadPivot';
-    headPivot.position.set(0, 1.12, 0);
+    const HEAD_Y = 0.95;
+    headPivot.position.set(0, HEAD_Y, 0);
     headPivot.rotation.order = 'YXZ';
     up.add(headPivot);
 
     const HA = 0.6, HB = 0.54, HC = 0.56;
-    const head = part(ellip(HA, HB, HC, 64), C.fur, 'Fur_Head');
+    const headGeo = ellip(HA, HB, HC, 128);
+    // đốm trên trán: 3 hạt bầu dục + 2 vạch nhỏ hai bên, vẽ phẳng trên da
+    const FORE = [[-0.1, 0.33, 0.032, 0.05, -0.25], [0, 0.36, 0.032, 0.05, 0], [0.1, 0.33, 0.032, 0.05, 0.25],
+      [-0.21, 0.27, 0.017, 0.045, 0.5], [0.21, 0.27, 0.017, 0.045, -0.5]];
+    paint(headGeo, C.fur, C.cream, (x, y, z) => {
+      if (z <= 0) return 0;
+      let k = 0;
+      for (const [cx, cy, rx, ry, rot] of FORE) {
+        const dx = x - cx, dy = y - cy, c = Math.cos(rot), sn = Math.sin(rot);
+        const u = dx * c + dy * sn, v = -dx * sn + dy * c;
+        k = Math.max(k, blob(Math.hypot(u / rx, v / ry)));
+      }
+      return k;
+    });
+    const head = part(headGeo, 0xffffff, "Paint_Head");
     head.position.set(0, 0.48, 0);
     headPivot.add(head);
 
@@ -209,20 +245,6 @@
         line.position.set(0.02 * k, 0.0, 0.018);
         ch.add(line);
       }
-    }
-
-    // đốm sao trên trán (3 hạt bầu dục + 2 vạch nhỏ hai bên)
-    for (const [x, y, r] of [[-0.1, 0.33, -0.25], [0, 0.36, 0], [0.1, 0.33, 0.25]]) {
-      const h = onHead(x, y, -0.004);
-      const sp = part(ellip(0.032, 0.05, 0.014, 20), C.cream, 'Cream_ForeheadSpot');
-      sp.rotation.z = r;
-      h.add(sp);
-    }
-    for (const s of [-1, 1]) {
-      const h = onHead(0.21 * s, 0.27, -0.002);
-      const d = part(new THREE.CapsuleGeometry(0.014, 0.045, 4, 8), C.cream, 'Cream_ForeheadDash');
-      d.rotation.z = -0.5 * s;
-      h.add(d);
     }
 
     // mõm kem + mũi + miệng ω
@@ -352,7 +374,7 @@
     function idle(t) {
       body.scale.set(1 + Math.sin(t * 2) * 0.012, 1 - Math.sin(t * 2) * 0.012, 1);
       headPivot.rotation.z = Math.sin(t * 1.2) * 0.05;
-      headPivot.position.y = 1.12 + Math.sin(t * 2) * 0.01;
+      headPivot.position.y = HEAD_Y + Math.sin(t * 2) * 0.01;
     }
 
     // đầu + mắt nhìn theo camera
