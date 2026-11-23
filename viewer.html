@@ -7,7 +7,7 @@
 <style>
   :root { --bg1:#fdf6ec; --bg2:#f3e6d6; --ink:#2b2326; --btn:#ffffffcc; }
   html,body { margin:0; height:100%; background:var(--bg1); font-family: system-ui, "Segoe UI", sans-serif; color:var(--ink); overflow:hidden; }
-  body { background: radial-gradient(circle at 50% 40%, var(--bg1), var(--bg2)); }
+  body { background: linear-gradient(180deg, #6f9ff4 0%, #9fd3ec 50%, #f6e7a8 100%); }
   canvas { display:block; }
   .ui { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); display:flex; gap:8px; flex-wrap:wrap; justify-content:center; padding:0 16px; }
   button { border:2px solid var(--ink); background:var(--btn); color:var(--ink); border-radius:999px; padding:8px 16px; font-size:14px; font-weight:600; cursor:pointer; }
@@ -21,11 +21,10 @@
 <div class="hint">Kéo để xoay · cuộn để phóng to</div>
 <div class="ui">
   <button id="rot">⏸ Dừng xoay</button>
-  <button id="line">✏️ Tắt viền</button>
   <button id="glb">⬇ Tải file .glb</button>
 </div>
 
-<script src="model.js?v=10"></script>
+<script src="model.js?v=12"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -36,12 +35,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -56,9 +58,13 @@ controls.autoRotateSpeed = 1.6;
 controls.minDistance = 2.5;
 controls.maxDistance = 12;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0xf0e2d2, 2.2));
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-sun.shadow.normalBias = 0.03;
+// ánh sáng studio mềm như ảnh render đồ chơi
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.9;
+scene.add(new THREE.HemisphereLight(0xdfeaff, 0xfff1d0, 0.6));
+const sun = new THREE.DirectionalLight(0xfff6ea, 1.6);
+sun.shadow.normalBias = 0.02;
+sun.shadow.radius = 6;
 sun.position.set(3, 6, 4);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -67,7 +73,7 @@ sun.shadow.camera.right = sun.shadow.camera.top = 3;
 sun.shadow.bias = -0.0005;
 scene.add(sun);
 
-const ground = new THREE.Mesh(new THREE.CircleGeometry(3, 64), new THREE.ShadowMaterial({ opacity: 0.18 }));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(3, 64), new THREE.ShadowMaterial({ opacity: 0.14 }));
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
@@ -75,18 +81,10 @@ scene.add(ground);
 const B = window.buildBunny(THREE);
 scene.add(B.root);
 window.__view = { camera, controls, B };
-B.root.traverse(o => { if (o.userData.isOutline) { o.castShadow = false; o.receiveShadow = false; } });
 
 // UI
 const rotBtn = document.getElementById('rot');
 rotBtn.onclick = () => { controls.autoRotate = !controls.autoRotate; rotBtn.textContent = controls.autoRotate ? '⏸ Dừng xoay' : '▶ Tự xoay'; };
-let lines = true;
-const lineBtn = document.getElementById('line');
-lineBtn.onclick = () => {
-  lines = !lines;
-  B.root.traverse(o => { if (o.userData.isOutline) o.visible = lines; });
-  lineBtn.textContent = lines ? '✏️ Tắt viền' : '✏️ Bật viền';
-};
 document.getElementById('glb').onclick = async () => {
   const exp = window.buildBunny(THREE, { forExport: true });
   const data = await new GLTFExporter().parseAsync(exp.root, { binary: true });

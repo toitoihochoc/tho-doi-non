@@ -25,49 +25,52 @@
     };
 
     // ---------- materials ----------
-    let gradient = null;
+    // Chất liệu nhung/flock mềm như đồ chơi: mờ, có ánh sheen ở viền, hạt li ti trên bề mặt.
+    let grain = null;
     if (!forExport) {
-      const d = new Uint8Array([110, 190, 255]);
-      gradient = new THREE.DataTexture(d, 3, 1, THREE.RedFormat);
-      gradient.minFilter = gradient.magFilter = THREE.NearestFilter;
-      gradient.needsUpdate = true;
+      const N = 128, d = new Uint8Array(N * N * 4);
+      for (let i = 0; i < N * N; i++) {
+        const v = 110 + Math.random() * 145;
+        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+      }
+      grain = new THREE.DataTexture(d, N, N, THREE.RGBAFormat);
+      grain.wrapS = grain.wrapT = THREE.RepeatWrapping;
+      grain.repeat.set(10, 10);
+      grain.magFilter = THREE.LinearFilter;
+      grain.minFilter = THREE.LinearMipmapLinearFilter;
+      grain.generateMipmaps = true;
+      grain.needsUpdate = true;
     }
+    const GLOSSY = { Ink: 0.3, White: 0.25, Mouth: 0.45, Pink: 0.6 };
     const mats = {};
     function mat(color, name) {
       if (mats[name]) return mats[name];
-      const m = forExport
-        ? new THREE.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0 })
-        : new THREE.MeshToonMaterial({ color, gradientMap: gradient });
+      let m;
+      if (forExport) {
+        m = new THREE.MeshStandardMaterial({ color, roughness: GLOSSY[name] ?? 0.85, metalness: 0 });
+      } else if (GLOSSY[name] !== undefined) {
+        m = new THREE.MeshPhysicalMaterial({ color, roughness: GLOSSY[name], clearcoat: name === "Ink" ? 0.6 : 0 });
+      } else {
+        const sheenColor = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.55);
+        m = new THREE.MeshPhysicalMaterial({
+          color, roughness: 0.92, metalness: 0,
+          sheen: 1, sheenRoughness: 0.55, sheenColor,
+          bumpMap: grain, bumpScale: 0.35,
+        });
+      }
       m.name = name;
       return (mats[name] = m);
     }
 
-    // Viền mực kiểu nét vẽ tay (inverted hull)
-    let outlineMat = null;
-    if (!forExport) {
-      outlineMat = new THREE.MeshBasicMaterial({ color: C.ink, side: THREE.BackSide });
-      outlineMat.onBeforeCompile = (s) => {
-        s.vertexShader = s.vertexShader.replace(
-          '#include <begin_vertex>',
-          '#include <begin_vertex>\ntransformed += normalize(normal) * 0.016;'
-        );
-      };
-    }
-
-    function part(geo, color, name, outline) {
-      const m = new THREE.Mesh(geo, mat(color, name.split('_')[0]));
+    function part(geo, color, name) {
+      const m = new THREE.Mesh(geo, mat(color, name.split("_")[0]));
       m.name = name;
       m.castShadow = true;
-      m.receiveShadow = false; // không tự đổ bóng lên người → bề mặt mượt, sạch
-      if (outline !== false && outlineMat) {
-        const o = new THREE.Mesh(geo, outlineMat);
-        o.userData.isOutline = true;
-        m.add(o);
-      }
+      m.receiveShadow = true;
       return m;
     }
     function ellip(rx, ry, rz, seg) {
-      seg = seg || 40;
+      seg = Math.max(seg || 48, 48);
       const g = new THREE.SphereGeometry(1, seg, Math.round(seg * 0.75));
       g.scale(rx, ry, rz);
       return g;
@@ -78,7 +81,7 @@
     // phần thân trên (mọi thứ trừ giày), nâng lên để lộ đôi giày
     const up = new THREE.Group();
     up.name = 'Upper';
-    up.position.y = 0.2;
+    up.position.y = 0.3;
     bunny.add(up);
 
     // ---------- body ----------
@@ -86,7 +89,8 @@
       [0, 0.16], [0.26, 0.17], [0.37, 0.22], [0.41, 0.32], [0.41, 0.5],
       [0.37, 0.78], [0.3, 1.0], [0.18, 1.12], [0, 1.15],
     ].map((p) => new THREE.Vector2(p[0], p[1]));
-    const bodyGeo = new THREE.LatheGeometry(bodyPts, 48);
+    // làm mượt đường viền thân bằng spline
+    const bodyGeo = new THREE.LatheGeometry(new THREE.SplineCurve(bodyPts).getPoints(48), 72);
     bodyGeo.scale(1, 1, 0.9);
     const body = part(bodyGeo, C.fur, 'Fur_Body');
     up.add(body);
@@ -121,6 +125,13 @@
       bunny.add(shoe);
     }
 
+    // chân ngắn nối thân với cổ giày cho gọn gàng
+    for (const s of [-1, 1]) {
+      const leg = part(ellip(0.135, 0.14, 0.135), C.fur, "Fur_Leg" + (s < 0 ? "L" : "R"));
+      leg.position.set(0.24 * s, 0.5, 0.04);
+      bunny.add(leg);
+    }
+
     // arms — xoay quanh vai để vẫy tay được
     const ARM_REST = 0.35;
     const arms = [];
@@ -136,10 +147,6 @@
       arms.push(pivot);
     }
 
-    // cổ: khối lông mềm nối thân với đầu cho liền mạch (không viền để không lộ đường nối)
-    const neck = part(ellip(0.28, 0.15, 0.27, 40), C.fur, 'Fur_Neck', false);
-    neck.position.set(0, 1.08, 0);
-    up.add(neck);
 
     // bow tie
     const bow = new THREE.Group();

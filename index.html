@@ -32,7 +32,7 @@
 </div>
 <div id="hint" hidden><span id="hintText">Đưa camera vào hình vẽ…</span></div>
 
-<script src="model.js?v=10"></script>
+<script src="model.js?v=12"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -131,10 +131,16 @@ function makeActor() {
 }
 
 function addLights(scene) {
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xf0e2d2, 2.4));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-  sun.position.set(0.5, -1, 2);
-  scene.add(sun);
+  // ánh sáng mềm kiểu studio cho chất liệu nhung (trục lên trong AR là +Z)
+  const hemi = new THREE.HemisphereLight(0xe6f0ff, 0xfff0d6, 1.7);
+  hemi.position.set(0, 0, 1);
+  scene.add(hemi);
+  const key = new THREE.DirectionalLight(0xfff6ea, 1.8);
+  key.position.set(0.8, -1.2, 2.2);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xdfe9ff, 0.9);
+  rim.position.set(-1, 1.5, 1.2);
+  scene.add(rim);
 }
 
 const clock = new THREE.Clock();
