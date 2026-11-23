@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thỏ Đội Nón 3D</title>
+<style>
+  :root { --bg1:#fdf6ec; --bg2:#f3e6d6; --ink:#2b2326; --btn:#ffffffcc; }
+  html,body { margin:0; height:100%; background:var(--bg1); font-family: system-ui, "Segoe UI", sans-serif; color:var(--ink); overflow:hidden; }
+  body { background: radial-gradient(circle at 50% 40%, var(--bg1), var(--bg2)); }
+  canvas { display:block; }
+  .ui { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); display:flex; gap:8px; flex-wrap:wrap; justify-content:center; padding:0 16px; }
+  button { border:2px solid var(--ink); background:var(--btn); color:var(--ink); border-radius:999px; padding:8px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+  button:hover { background:#fff; }
+  h1 { position:fixed; top:16px; left:0; right:0; text-align:center; margin:0; font-size:20px; font-weight:700; letter-spacing:.5px; }
+  .hint { position:fixed; top:46px; left:0; right:0; text-align:center; font-size:13px; opacity:.6; }
+</style>
+</head>
+<body>
+<h1>Thỏ Đội Nón 🐰🎩</h1>
+<div class="hint">Kéo để xoay · cuộn để phóng to</div>
+<div class="ui">
+  <button id="rot">⏸ Dừng xoay</button>
+  <button id="line">✏️ Tắt viền</button>
+  <button id="glb">⬇ Tải file .glb</button>
+</div>
+
+<script src="model.js?v=3"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(1.6, 2.0, 6.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.25, 0);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.6;
+controls.minDistance = 2.5;
+controls.maxDistance = 12;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0xf0e2d2, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.shadow.normalBias = 0.03;
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -3;
+sun.shadow.camera.right = sun.shadow.camera.top = 3;
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(3, 64), new THREE.ShadowMaterial({ opacity: 0.18 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const B = window.buildBunny(THREE);
+scene.add(B.root);
+window.__view = { camera, controls, B };
+B.root.traverse(o => { if (o.userData.isOutline) { o.castShadow = false; o.receiveShadow = false; } });
+
+// UI
+const rotBtn = document.getElementById('rot');
+rotBtn.onclick = () => { controls.autoRotate = !controls.autoRotate; rotBtn.textContent = controls.autoRotate ? '⏸ Dừng xoay' : '▶ Tự xoay'; };
+let lines = true;
+const lineBtn = document.getElementById('line');
+lineBtn.onclick = () => {
+  lines = !lines;
+  B.root.traverse(o => { if (o.userData.isOutline) o.visible = lines; });
+  lineBtn.textContent = lines ? '✏️ Tắt viền' : '✏️ Bật viền';
+};
+document.getElementById('glb').onclick = async () => {
+  const exp = window.buildBunny(THREE, { forExport: true });
+  const data = await new GLTFExporter().parseAsync(exp.root, { binary: true });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
+  a.download = 'tho-doi-non.glb';
+  a.click();
+};
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// idle animation: thở nhẹ, lắc đầu, vẫy tai
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  B.body.scale.set(1 + Math.sin(t * 2) * 0.012, 1 - Math.sin(t * 2) * 0.012, 1);
+  B.headPivot.rotation.z = Math.sin(t * 1.2) * 0.06;
+  B.headPivot.position.y = 1.12 + Math.sin(t * 2) * 0.01;
+  B.ears[0].rotation.z = -0.85 + Math.sin(t * 2.4) * 0.06;
+  B.ears[1].rotation.z = 0.85 + Math.sin(t * 2.4 + 1) * 0.06;
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

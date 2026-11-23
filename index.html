@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Thỏ Đội Nón AR</title>
+<style>
+  :root { --ink:#2b2326; --paper:#fdf6ec; --accent:#e9c58c; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#000; font-family:system-ui,"Segoe UI",sans-serif; color:var(--ink); }
+  #ar { position:fixed; inset:0; }
+  #intro { position:fixed; inset:0; z-index:10; background:var(--paper); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px 16px; box-sizing:border-box; text-align:center; }
+  #intro img { width:min(46vw,220px); border:2px solid var(--ink); border-radius:12px; transform:rotate(-3deg); background:#fff; }
+  #intro h1 { margin:0; font-size:24px; }
+  #intro p { margin:0; max-width:340px; line-height:1.5; font-size:15px; }
+  button { border:2px solid var(--ink); background:var(--accent); color:var(--ink); border-radius:999px; padding:12px 28px; font-size:17px; font-weight:700; cursor:pointer; }
+  .link { font-size:13px; color:var(--ink); opacity:.7; }
+  #hint { position:fixed; left:0; right:0; bottom:24px; z-index:5; text-align:center; pointer-events:none; }
+  #hint span { background:#fffffff0; border:2px solid var(--ink); border-radius:999px; padding:8px 16px; font-size:14px; font-weight:600; }
+  #err { color:#b3261e; font-size:14px; max-width:340px; }
+</style>
+</head>
+<body>
+<div id="ar"></div>
+<div id="intro">
+  <img src="target.jpg" alt="Hình vẽ chú thỏ đội nón">
+  <h1>Thỏ Đội Nón 🐰🎩</h1>
+  <p>Hướng camera vào hình vẽ chú thỏ trên trang giấy. Giữ yên một chút, chú thỏ sẽ nhảy ra khỏi trang!</p>
+  <button id="start">📷 Bắt đầu quét</button>
+  <a class="link" href="?demo">Không có trang giấy? Xem thử không cần camera</a>
+  <a class="link" href="viewer.html">Xem mô hình 3D xoay tự do</a>
+  <div id="err"></div>
+</div>
+<div id="hint" hidden><span id="hintText">Đưa camera vào hình vẽ…</span></div>
+
+<script src="model.js?v=3"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// Tỉ lệ hình nhận diện (target.jpg 615 x 790): MindAR coi chiều rộng = 1
+const TARGET_H = 790 / 615;
+const FEET_Y = -0.42;      // vị trí chân chú thỏ trên hình vẽ
+const LAND_Y = -0.12;      // chỗ chú thỏ đáp xuống sau khi nhảy
+const SCALE = 0.36;
+
+const intro = document.getElementById('intro');
+const hint = document.getElementById('hint');
+const hintText = document.getElementById('hintText');
+const isDemo = new URLSearchParams(location.search).has('demo');
+
+// ---------- chú thỏ + hiệu ứng nhảy ----------
+function makeActor() {
+  const B = window.buildBunny(THREE);
+  B.root.scale.setScalar(SCALE);
+  const actor = new THREE.Group();          // gốc tại chân, nằm trên mặt giấy
+  actor.add(B.root);
+
+  // bóng mờ dưới chân
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.2, 40),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false })
+  );
+  shadow.scale.set(1, 0.55, 1);
+  shadow.position.z = 0.002;
+
+  const root = new THREE.Group();
+  root.add(shadow, actor);
+
+  let state = 'hidden', t0 = 0, nextHop = 0;
+  const ease = (x) => 1 - Math.pow(1 - x, 3);
+
+  function reset() {
+    state = 'hidden';
+    root.visible = false;
+  }
+  function jump(now) {
+    state = 'jump'; t0 = now; root.visible = true;
+  }
+  function hop(now) {
+    if (state === 'idle') { state = 'hop'; t0 = now; }
+  }
+
+  function update(now) {
+    if (state === 'hidden') return;
+    const t = now - t0;
+    let rot = Math.PI / 2, y = LAND_Y, z = 0, sx = 1, sy = 1, appear = 1;
+
+    if (state === 'jump') {
+      const D = 1.15;
+      const p = Math.min(t / D, 1);
+      appear = Math.min(t / 0.25, 1);
+      rot = (Math.PI / 2) * ease(Math.min(p * 1.25, 1));   // từ nằm trên giấy → đứng dậy
+      y = FEET_Y + (LAND_Y - FEET_Y) * ease(p);
+      z = Math.sin(Math.PI * p) * 0.45;                    // vòng cung nhảy lên
+      if (p < 0.15) { sy = 1 - p * 1.5; sx = 1 + p; }      // nhún lấy đà
+      if (p >= 1) { state = 'land'; t0 = now; }
+    } else if (state === 'land' || state === 'hop') {
+      const D = state === 'land' ? 0.5 : 0.7;
+      const p = Math.min(t / D, 1);
+      if (state === 'hop') z = Math.sin(Math.PI * p) * 0.18;
+      const squash = Math.sin(Math.PI * Math.min(p * (state === 'hop' ? 1 : 1.6), 1)) * (state === 'hop' ? 0.08 : 0.18);
+      if (state === 'land' || p > 0.8) { sy = 1 - squash; sx = 1 + squash * 0.6; }
+      if (p >= 1) { state = 'idle'; t0 = now; nextHop = now + 3 + Math.random() * 3; }
+    } else if (state === 'idle') {
+      sy = 1 + Math.sin(t * 3) * 0.015;
+      B.headPivot.rotation.z = Math.sin(t * 1.3) * 0.08;
+      B.ears[0].rotation.z = -0.85 + Math.sin(t * 2.4) * 0.07;
+      B.ears[1].rotation.z = 0.85 + Math.sin(t * 2.4 + 1) * 0.07;
+      B.arms[0].rotation.z = -0.35 - Math.max(0, Math.sin(t * 2)) * 0.25;
+      if (now > nextHop) hop(now);
+    }
+
+    actor.position.set(0, y, z);
+    actor.rotation.x = rot;
+    actor.scale.set(sx * appear, sy * appear, sx * appear);
+    shadow.position.y = y + 0.02;
+    const s = Math.max(0.35, 1 - z * 1.4) * appear;
+    shadow.scale.set(s, 0.55 * s, 1);
+    shadow.material.opacity = 0.25 * s;
+  }
+
+  reset();
+  return { root, update, jump, hop, reset, get state() { return state; } };
+}
+
+function addLights(scene) {
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xf0e2d2, 2.4));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(0.5, -1, 2);
+  scene.add(sun);
+}
+
+const clock = new THREE.Clock();
+
+// ---------- chế độ AR thật ----------
+async function startAR() {
+  const { MindARThree } = await import('mindar-image-three');
+  const mindar = new MindARThree({
+    container: document.getElementById('ar'),
+    imageTargetSrc: './targets.mind',
+    uiScanning: 'no',
+    uiLoading: 'yes',
+    filterMinCF: 0.0005,
+    filterBeta: 0.001,
+    missTolerance: 10,
+    warmupTolerance: 3,
+  });
+  const { renderer, scene, camera } = mindar;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  addLights(scene);
+  const anchor = mindar.addAnchor(0);
+  const actor = makeActor();
+  anchor.group.add(actor.root);
+
+  anchor.onTargetFound = () => { actor.jump(clock.getElapsedTime()); hint.hidden = true; };
+  anchor.onTargetLost = () => { actor.reset(); hint.hidden = false; hintText.textContent = 'Đưa camera vào hình vẽ…'; };
+  renderer.domElement.addEventListener('pointerdown', () => actor.hop(clock.getElapsedTime()));
+
+  await mindar.start();
+  hint.hidden = false;
+  renderer.setAnimationLoop(() => {
+    actor.update(clock.getElapsedTime());
+    renderer.render(scene, camera);
+  });
+}
+
+// ---------- chế độ xem thử (không camera) ----------
+async function startDemo() {
+  const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+  document.body.style.background = '#efe3d3';
+  const el = document.getElementById('ar');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  el.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
+  camera.up.set(0, 0, 1);
+  camera.position.set(0.6, -2.2, 1.6);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0, 0.25);
+  controls.update();
+  addLights(scene);
+
+  // trang giấy có hình vẽ
+  const tex = new THREE.TextureLoader().load('target.jpg');
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const page = new THREE.Mesh(new THREE.PlaneGeometry(1, TARGET_H), new THREE.MeshBasicMaterial({ map: tex }));
+  scene.add(page);
+
+  const actor = makeActor();
+  scene.add(actor.root);
+  const replay = () => actor.jump(clock.getElapsedTime());
+  setTimeout(replay, 900);
+  hint.hidden = false;
+  hintText.textContent = 'Chạm để chú thỏ nhảy · chạm 2 lần để xem lại từ đầu';
+  renderer.domElement.addEventListener('dblclick', replay);
+  renderer.domElement.addEventListener('pointerdown', () => actor.hop(clock.getElapsedTime()));
+  window.__demo = { actor, camera, controls, replay };
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+  renderer.setAnimationLoop(() => {
+    actor.update(clock.getElapsedTime());
+    renderer.render(scene, camera);
+  });
+}
+
+if (isDemo) {
+  intro.remove();
+  startDemo();
+} else {
+  document.getElementById('start').onclick = async () => {
+    const btn = document.getElementById('start');
+    btn.disabled = true; btn.textContent = 'Đang mở camera…';
+    try {
+      await startAR();
+      intro.remove();
+    } catch (e) {
+      console.error(e);
+      btn.disabled = false; btn.textContent = '📷 Thử lại';
+      document.getElementById('err').textContent =
+        'Không mở được camera. Hãy cho phép trình duyệt dùng camera và mở trang bằng link https.';
+    }
+  };
+}
+</script>
+</body>
+</html>
