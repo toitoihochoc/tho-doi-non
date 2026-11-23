@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Thỏ Đội Nón 3D</title>
+<title>Thỏ & Nai 3D</title>
 <style>
   :root { --bg1:#fdf6ec; --bg2:#f3e6d6; --ink:#2b2326; --btn:#ffffffcc; }
   html,body { margin:0; height:100%; background:var(--bg1); font-family: system-ui, "Segoe UI", sans-serif; color:var(--ink); overflow:hidden; }
@@ -17,14 +17,16 @@
 </style>
 </head>
 <body>
-<h1>Thỏ Đội Nón 🐰🎩</h1>
+<h1 id="title">Thỏ Đội Nón 🐰🎩</h1>
 <div class="hint">Kéo để xoay · cuộn để phóng to</div>
 <div class="ui">
+  <button id="char">🦌 Xem nai sao</button>
   <button id="rot">⏸ Dừng xoay</button>
   <button id="glb">⬇ Tải file .glb</button>
 </div>
 
 <script src="model.js?v=14"></script>
+<script src="deer.js?v=2"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -78,7 +80,18 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const B = window.buildBunny(THREE);
+// chọn nhân vật: ?char=deer → nai sao, mặc định → thỏ
+const CHARS = {
+  bunny: { build: window.buildBunny, title: "Thỏ Đội Nón 🐰🎩", file: "tho-doi-non.glb", other: "deer", otherLabel: "🦌 Xem nai sao" },
+  deer: { build: window.buildDeer, title: "Nai Sao 🦌✨", file: "nai-sao.glb", other: "bunny", otherLabel: "🐰 Xem thỏ đội nón" },
+};
+const charKey = new URLSearchParams(location.search).get("char") === "deer" ? "deer" : "bunny";
+const CH = CHARS[charKey];
+document.getElementById("title").textContent = CH.title;
+const charBtn = document.getElementById("char");
+charBtn.textContent = CH.otherLabel;
+charBtn.onclick = () => { location.search = CH.other === "deer" ? "?char=deer" : ""; };
+const B = CH.build(THREE);
 scene.add(B.root);
 window.__view = { camera, controls, B };
 
@@ -86,11 +99,11 @@ window.__view = { camera, controls, B };
 const rotBtn = document.getElementById('rot');
 rotBtn.onclick = () => { controls.autoRotate = !controls.autoRotate; rotBtn.textContent = controls.autoRotate ? '⏸ Dừng xoay' : '▶ Tự xoay'; };
 document.getElementById('glb').onclick = async () => {
-  const exp = window.buildBunny(THREE, { forExport: true });
+  const exp = CH.build(THREE, { forExport: true });
   const data = await new GLTFExporter().parseAsync(exp.root, { binary: true });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
-  a.download = 'tho-doi-non.glb';
+  a.download = CH.file;
   a.click();
 };
 
@@ -106,11 +119,15 @@ renderer.setAnimationLoop(() => {
   const t = clock.getElapsedTime();
   B.lookAt(camera.position);
   B.update(t);
-  B.body.scale.set(1 + Math.sin(t * 2) * 0.012, 1 - Math.sin(t * 2) * 0.012, 1);
-  B.headPivot.rotation.z = Math.sin(t * 1.2) * 0.06;
-  B.headPivot.position.y = 1.12 + Math.sin(t * 2) * 0.01;
-  B.ears[0].rotation.z = -0.85 + Math.sin(t * 2.4) * 0.06;
-  B.ears[1].rotation.z = 0.85 + Math.sin(t * 2.4 + 1) * 0.06;
+  if (B.idle) {
+    B.idle(t);
+  } else {
+    B.body.scale.set(1 + Math.sin(t * 2) * 0.012, 1 - Math.sin(t * 2) * 0.012, 1);
+    B.headPivot.rotation.z = Math.sin(t * 1.2) * 0.06;
+    B.headPivot.position.y = 1.12 + Math.sin(t * 2) * 0.01;
+    B.ears[0].rotation.z = -0.85 + Math.sin(t * 2.4) * 0.06;
+    B.ears[1].rotation.z = 0.85 + Math.sin(t * 2.4 + 1) * 0.06;
+  }
   controls.update();
   renderer.render(scene, camera);
 });
